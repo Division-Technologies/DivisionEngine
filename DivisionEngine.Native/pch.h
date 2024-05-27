@@ -9,6 +9,9 @@
 
 // プリコンパイルするヘッダーをここに追加します
 #include "framework.h"
+#include <wrl/client.h>
+
 #define DIVISION_EXPORT extern "C" __declspec(dllexport)
+template<typename T> using ComPtr = Microsoft::WRL::ComPtr<T>;
 
 #endif //PCH_H
