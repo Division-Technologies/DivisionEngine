@@ -6,12 +6,23 @@ namespace DivisionEngine.Editor
     {
         public static MauiApp CreateMauiApp()
         {
+
+            NativeMethods.InitD3D12(0, 600, 400);
+
+            Task.Run(() =>
+            {
+                while (true)
+                {
+                    NativeMethods.Render();
+                }
+            });
+
             var builder = MauiApp.CreateBuilder();
             builder
                 .UseMauiApp<App>()
                 .ConfigureMauiHandlers(handlers =>
                 {
-                    handlers.AddHandler(typeof(CustomSwapChainPanel), typeof(CustomSwapChainPanelHandler));
+                    handlers.AddHandler(typeof(NativeGraphicsPanel), typeof(NativeGraphicsPanelHandler));
                 })
                 .ConfigureFonts(fonts =>
                 {

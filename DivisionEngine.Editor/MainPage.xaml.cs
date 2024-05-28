@@ -11,7 +11,7 @@
 
         private void OnCounterClicked(object sender, EventArgs e)
         {
-            count = DivisionEngine.Core.NativeMethods.Add(count, 1);
+            count = NativeMethods.Add(count, 1);
 
             if (count == 1)
                 CounterBtn.Text = $"Clicked {count} time";

@@ -32,7 +32,7 @@
                 Clicked="OnCounterClicked"
                 HorizontalOptions="Fill" />
 
-            <local:CustomSwapChainPanel WidthRequest="800" HeightRequest="600" />
+            <local:NativeGraphicsPanel WidthRequest="800" HeightRequest="600" />
 
         </VerticalStackLayout>
     </ScrollView>

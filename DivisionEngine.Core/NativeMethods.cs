@@ -15,4 +15,16 @@ internal static partial class NativeMethods
 
     [LibraryImport("DivisionEngine.Native.dll")]
     public static partial void TestMain();
+
+
+    [LibraryImport("DivisionEngine.Native.dll")]
+    public static partial IntPtr GetSwapChain();
+
+    [LibraryImport("DivisionEngine.Native.dll")]
+    public static partial uint InitD3D12(IntPtr hwnd, uint width, uint height);
+
+
+    [LibraryImport("DivisionEngine.Native.dll")]
+    public static partial uint Render();
+
 }

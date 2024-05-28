@@ -61,11 +61,9 @@ HWND InitWindow(const TCHAR* appName, UINT width, UINT height)
 		nullptr
 	);
 
-	// ウィンドウを表示
 	ShowWindow(g_hWnd, SW_SHOWNORMAL);
 
-	// ウィンドウにフォーカスする
 	SetFocus(g_hWnd);
 
-    return g_hWnd;
+	return g_hWnd;
 }

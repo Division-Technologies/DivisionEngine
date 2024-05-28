@@ -1,25 +1,23 @@
 
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using Microsoft.Maui.Handlers;
 using Microsoft.UI.Xaml.Controls;
 using WinRT;
-// [assembly: ExportHandler(typeof(CustomSwapChainPanelControl), typeof(CustomSwapChainPanelControlHandler))]
 
 namespace DivisionEngine.Editor;
 
-public partial class CustomSwapChainPanelHandler : ViewHandler<CustomSwapChainPanel, SwapChainPanel>
+public partial class NativeGraphicsPanelHandler : ViewHandler<NativeGraphicsPanel, SwapChainPanel>
 {
-    public static IPropertyMapper<CustomSwapChainPanel, CustomSwapChainPanelHandler> Mapper =
-        new PropertyMapper<CustomSwapChainPanel, CustomSwapChainPanelHandler>(ViewMapper)
+    public static IPropertyMapper<NativeGraphicsPanel, NativeGraphicsPanelHandler> Mapper =
+        new PropertyMapper<NativeGraphicsPanel, NativeGraphicsPanelHandler>(ViewMapper)
         {
-            [nameof(CustomSwapChainPanel.Background)] = (handler, view) => { },
+            [nameof(NativeGraphicsPanel.Background)] = (handler, view) => { }, // workaround: Background property is not supported by SwapChainPanel
         };
 
-    public static CommandMapper<CustomSwapChainPanel, CustomSwapChainPanelHandler> CommandMapper =
+    public static CommandMapper<NativeGraphicsPanel, NativeGraphicsPanelHandler> CommandMapper =
         new(ViewCommandMapper);
 
-    public CustomSwapChainPanelHandler() : base(Mapper, CommandMapper)
+    public NativeGraphicsPanelHandler() : base(Mapper, CommandMapper)
     {
     }
 
@@ -31,23 +29,14 @@ public partial class CustomSwapChainPanelHandler : ViewHandler<CustomSwapChainPa
     protected override void ConnectHandler(SwapChainPanel platformView)
     {
         base.ConnectHandler(platformView);
-        InitializeDirectX(platformView);
-    }
 
-    private void InitializeDirectX(SwapChainPanel swapChainPanel)
-    {
-        // Implement your DirectX initialization and rendering logic here
-        // ((System.Runtime.InteropServices.ICustomQueryInterface)swapChainPanel).GetInterface()
-        IntPtr swapChainPanelPtr = ((IWinRTObject)swapChainPanel).NativeObject.ThisPtr;
+        IntPtr swapChainPanelPtr = ((IWinRTObject)platformView).NativeObject.ThisPtr;
+        IntPtr swapChain = NativeMethods.GetSwapChain();
+        var result = EditorNativeMethods.SetSwapChain(swapChainPanelPtr, swapChain);
 
-        Debug.WriteLine(swapChainPanelPtr);
-        
-
-    }
-
-    protected override void DisconnectHandler(SwapChainPanel platformView)
-    {
-        base.DisconnectHandler(platformView);
-        // Cleanup any resources if needed
+        if (result != 0)
+        {
+            Debug.Fail("Failed to set swap chain.");
+        }
     }
 }
