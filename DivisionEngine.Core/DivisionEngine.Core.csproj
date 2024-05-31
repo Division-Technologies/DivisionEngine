@@ -8,11 +8,8 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
-  <ItemGroup>
+  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('windows'))">
     <ProjectReference Include="..\DivisionEngine.Native\DivisionEngine.Native.vcxproj" />
-  </ItemGroup>
-
-  <ItemGroup>
     <Content Include="..\x64\Debug\DivisionEngine.Native*">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>

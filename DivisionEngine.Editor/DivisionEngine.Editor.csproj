@@ -68,10 +68,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\DivisionEngine.Core\DivisionEngine.Core.csproj" />
-    <ProjectReference Include="..\DivisionEngine.Editor.Native\DivisionEngine.Editor.Native.vcxproj" />
   </ItemGroup>
 
   <ItemGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">
+    <ProjectReference Include="..\DivisionEngine.Editor.Native\DivisionEngine.Editor.Native.vcxproj" />
     <Content Include="..\x64\Debug\DivisionEngine.Editor.Native*">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
