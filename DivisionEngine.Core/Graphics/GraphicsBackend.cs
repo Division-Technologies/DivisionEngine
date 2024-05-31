@@ -1,13 +1,11 @@
-﻿namespace DivisionEngine.Graphics
+﻿namespace DivisionEngine.Graphics;
+
+public abstract partial class GraphicsBackend : IDisposable
 {
-    public abstract partial class GraphicsBackend : IDisposable
-    {
-        public static partial GraphicsBackend CreateBackend();
+    public abstract void Dispose();
+    public static partial GraphicsBackend CreateBackend();
 
-        public abstract void Dispose();
+    public abstract void Initialize();
 
-        public abstract void Initialize();
-
-        public abstract void Render();
-    }
+    public abstract void Render();
 }

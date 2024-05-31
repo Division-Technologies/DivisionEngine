@@ -1,6 +1,5 @@
-﻿namespace DivisionEngine.Editor
+﻿namespace DivisionEngine.Editor;
+
+partial class NativeGraphicsPanelHandler
 {
-    partial class NativeGraphicsPanelHandler
-    {
-    }
 }

@@ -1,6 +1,4 @@
 ﻿#if MACCATALYST
-
-
 namespace DivisionEngine.Graphics
 {
     partial class GraphicsBackend

@@ -6,6 +6,14 @@ namespace DivisionEngine.Graphics
 {
     internal partial class D3D12Backend : GraphicsBackend
     {
+        private int disposeLock;
+
+        private IntPtr ptr;
+
+        public D3D12Backend()
+        {
+            ptr = D3D12Backend_New();
+        }
 
         [LibraryImport(NativeMethods.NativeLibrary)]
         private static partial IntPtr D3D12Backend_New();
@@ -21,14 +29,6 @@ namespace DivisionEngine.Graphics
 
         [LibraryImport(NativeMethods.NativeLibrary)]
         private static partial IntPtr D3D12Backend_GetSwapChain(IntPtr ptr);
-
-        private IntPtr ptr;
-        private int disposeLock;
-
-        public D3D12Backend()
-        {
-            ptr = D3D12Backend_New();
-        }
 
         private void DisposeCore()
         {
@@ -49,11 +49,20 @@ namespace DivisionEngine.Graphics
             DisposeCore();
         }
 
-        public override void Initialize() => D3D12Backend_Init(ptr, IntPtr.Zero, 800, 600);
+        public override void Initialize()
+        {
+            D3D12Backend_Init(ptr, IntPtr.Zero, 800, 600);
+        }
 
-        public override void Render() => D3D12Backend_Render(ptr);
+        public override void Render()
+        {
+            D3D12Backend_Render(ptr);
+        }
 
-        public IntPtr GetSwapChain() => D3D12Backend_GetSwapChain(ptr);
+        public IntPtr GetSwapChain()
+        {
+            return D3D12Backend_GetSwapChain(ptr);
+        }
     }
 }
 

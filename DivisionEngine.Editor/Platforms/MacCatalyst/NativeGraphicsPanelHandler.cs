@@ -7,12 +7,11 @@ namespace DivisionEngine.Editor;
 public partial class NativeGraphicsPanelHandler : ViewHandler<NativeGraphicsPanel, MTKView>
 {
     public static IPropertyMapper<NativeGraphicsPanel, NativeGraphicsPanelHandler> Mapper =
-        new PropertyMapper<NativeGraphicsPanel, NativeGraphicsPanelHandler>(ViewMapper)
-        {
-        };
+        new PropertyMapper<NativeGraphicsPanel, NativeGraphicsPanelHandler>(ViewMapper);
 
     public static CommandMapper<NativeGraphicsPanel, NativeGraphicsPanelHandler> CommandMapper =
         new(ViewCommandMapper);
+
     private readonly GraphicsBackend graphicsBackend;
 
     public NativeGraphicsPanelHandler(GraphicsBackend graphicsBackend) : base(Mapper, CommandMapper)

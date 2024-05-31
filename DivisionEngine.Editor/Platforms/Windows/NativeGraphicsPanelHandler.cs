@@ -1,4 +1,3 @@
-
 using DivisionEngine.Graphics;
 using Microsoft.Maui.Handlers;
 using Microsoft.UI.Xaml.Controls;
@@ -12,11 +11,13 @@ public partial class NativeGraphicsPanelHandler : ViewHandler<NativeGraphicsPane
     public static IPropertyMapper<NativeGraphicsPanel, NativeGraphicsPanelHandler> Mapper =
         new PropertyMapper<NativeGraphicsPanel, NativeGraphicsPanelHandler>(ViewMapper)
         {
-            [nameof(NativeGraphicsPanel.Background)] = (handler, view) => { }, // workaround: Background property is not supported by SwapChainPanel
+            [nameof(NativeGraphicsPanel.Background)] =
+                (handler, view) => { } // workaround: Background property is not supported by SwapChainPanel
         };
 
     public static CommandMapper<NativeGraphicsPanel, NativeGraphicsPanelHandler> CommandMapper =
         new(ViewCommandMapper);
+
     private readonly GraphicsBackend graphicsBackend;
 
     public NativeGraphicsPanelHandler(GraphicsBackend graphicsBackend) : base(Mapper, CommandMapper)

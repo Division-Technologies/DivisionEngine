@@ -10,19 +10,19 @@
 #pragma comment(lib, "dxgi.lib")
 
 BOOL APIENTRY DllMain(HMODULE hModule,
-	DWORD  ul_reason_for_call,
-	LPVOID lpReserved
+                      DWORD ul_reason_for_call,
+                      LPVOID lpReserved
 )
 {
-	switch (ul_reason_for_call)
-	{
-	case DLL_PROCESS_ATTACH:
-	case DLL_THREAD_ATTACH:
-	case DLL_THREAD_DETACH:
-	case DLL_PROCESS_DETACH:
-		break;
-	}
-	return TRUE;
+    switch (ul_reason_for_call)
+    {
+    case DLL_PROCESS_ATTACH:
+    case DLL_THREAD_ATTACH:
+    case DLL_THREAD_DETACH:
+    case DLL_PROCESS_DETACH:
+        break;
+    }
+    return TRUE;
 }
 
 using namespace winrt;
@@ -30,17 +30,17 @@ using namespace Microsoft::UI::Xaml::Controls;
 
 DIVISION_EXPORT HRESULT SetSwapChain(SwapChainPanel* swapChainPanel, IDXGISwapChain* swapChain)
 {
-	winrt::com_ptr<ISwapChainPanelNative> nativeSwapChainPanel;
+    com_ptr<ISwapChainPanelNative> nativeSwapChainPanel;
 
-	HRESULT result;
+    HRESULT result;
 
-	IUnknown* swapChainPanelUnknown = reinterpret_cast<IUnknown*>(swapChainPanel);
+    auto swapChainPanelUnknown = reinterpret_cast<IUnknown*>(swapChainPanel);
 
-	result = swapChainPanelUnknown->QueryInterface(IID_PPV_ARGS(&nativeSwapChainPanel));
-	if (result != S_OK) return result;
+    result = swapChainPanelUnknown->QueryInterface(IID_PPV_ARGS(&nativeSwapChainPanel));
+    if (result != S_OK) return result;
 
-	result = nativeSwapChainPanel->SetSwapChain(swapChain);
-	if (result != S_OK) return result;
+    result = nativeSwapChainPanel->SetSwapChain(swapChain);
+    if (result != S_OK) return result;
 
-	return S_OK;
+    return S_OK;
 }
