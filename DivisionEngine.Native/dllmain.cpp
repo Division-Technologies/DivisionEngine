@@ -1,7 +1,4 @@
 ﻿#include "pch.h"
-#include <cstdint>
-#include "window.h"
-#include "d3d12_entrypoint.h"
 
 BOOL APIENTRY DllMain(HMODULE hModule,
                       DWORD ul_reason_for_call,

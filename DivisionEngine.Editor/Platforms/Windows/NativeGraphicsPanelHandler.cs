@@ -1,7 +1,8 @@
 
-using System.Diagnostics;
+using DivisionEngine.Graphics;
 using Microsoft.Maui.Handlers;
 using Microsoft.UI.Xaml.Controls;
+using System.Diagnostics;
 using WinRT;
 
 namespace DivisionEngine.Editor;
@@ -16,9 +17,11 @@ public partial class NativeGraphicsPanelHandler : ViewHandler<NativeGraphicsPane
 
     public static CommandMapper<NativeGraphicsPanel, NativeGraphicsPanelHandler> CommandMapper =
         new(ViewCommandMapper);
+    private readonly GraphicsBackend graphicsBackend;
 
-    public NativeGraphicsPanelHandler() : base(Mapper, CommandMapper)
+    public NativeGraphicsPanelHandler(GraphicsBackend graphicsBackend) : base(Mapper, CommandMapper)
     {
+        this.graphicsBackend = graphicsBackend;
     }
 
     protected override SwapChainPanel CreatePlatformView()
@@ -30,8 +33,14 @@ public partial class NativeGraphicsPanelHandler : ViewHandler<NativeGraphicsPane
     {
         base.ConnectHandler(platformView);
 
+        if (graphicsBackend is not D3D12Backend d3d12Backend)
+        {
+            Debug.Fail("Unsupported graphics backend.");
+            return;
+        }
+
         IntPtr swapChainPanelPtr = ((IWinRTObject)platformView).NativeObject.ThisPtr;
-        IntPtr swapChain = NativeMethods.GetSwapChain();
+        IntPtr swapChain = d3d12Backend.GetSwapChain();
         var result = EditorNativeMethods.SetSwapChain(swapChainPanelPtr, swapChain);
 
         if (result != 0)
