@@ -1,3 +1,3 @@
 ﻿using System.Runtime.CompilerServices;
 
-[assembly:InternalsVisibleTo("DivisionEngine.Editor")]
+[assembly: InternalsVisibleTo("DivisionEngine.Editor")]
