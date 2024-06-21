@@ -12,9 +12,9 @@ public partial class NativeGraphicsPanelHandler : ViewHandler<NativeGraphicsPane
     public static CommandMapper<NativeGraphicsPanel, NativeGraphicsPanelHandler> CommandMapper =
         new(ViewCommandMapper);
 
-    private readonly GraphicsBackend graphicsBackend;
+    private readonly IGraphicsBackend graphicsBackend;
 
-    public NativeGraphicsPanelHandler(GraphicsBackend graphicsBackend) : base(Mapper, CommandMapper)
+    public NativeGraphicsPanelHandler(IGraphicsBackend graphicsBackend) : base(Mapper, CommandMapper)
     {
         this.graphicsBackend = graphicsBackend;
     }
