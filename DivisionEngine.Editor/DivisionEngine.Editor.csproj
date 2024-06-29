@@ -81,5 +81,8 @@
     <Compile Update="Platforms\MacCatalyst\NativeGraphicsPanelHandler.cs">
       <ExcludeFromCurrentConfiguration>true</ExcludeFromCurrentConfiguration>
     </Compile>
+    <Compile Update="Platforms\MacCatalyst\PlatformConfigurerWindows.cs">
+      <ExcludeFromCurrentConfiguration>true</ExcludeFromCurrentConfiguration>
+    </Compile>
   </ItemGroup>
 </Project>
