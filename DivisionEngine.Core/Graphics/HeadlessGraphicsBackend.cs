@@ -1,16 +1,16 @@
 ﻿namespace DivisionEngine.Graphics;
 
-internal class HeadlessGraphicsBackend : GraphicsBackend
+internal class HeadlessGraphicsBackend : IGraphicsBackend
 {
-    public override void Dispose()
+    public void Dispose()
     {
     }
 
-    public override void Initialize()
+    public void Initialize()
     {
     }
 
-    public override void Render()
+    public void Render()
     {
     }
 }

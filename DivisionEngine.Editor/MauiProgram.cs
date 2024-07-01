@@ -1,5 +1,4 @@
-﻿using DivisionEngine.Graphics;
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 
 namespace DivisionEngine.Editor;
 
@@ -7,14 +6,6 @@ public static class MauiProgram
 {
     public static MauiApp CreateMauiApp()
     {
-        var backend = GraphicsBackend.CreateBackend();
-        backend.Initialize();
-
-        Task.Run(() =>
-        {
-            while (true) backend.Render();
-        });
-
         var builder = MauiApp.CreateBuilder();
         builder
             .UseMauiApp<App>()
@@ -28,7 +19,16 @@ public static class MauiProgram
                 fonts.AddFont("OpenSans-Semibold.ttf", "OpenSansSemibold");
             });
 
-        builder.Services.AddSingleton(typeof(GraphicsBackend), backend);
+        var configurer = IPlatformConfigurer.GetInstance();
+
+        builder.Services.AddSingleton(serviceProvider =>
+        {
+            var backend = configurer.CreateGraphicsBackend(serviceProvider);
+            backend.Initialize();
+            return backend;
+        });
+        builder.Services.AddSingleton(configurer.CreateCoreLoopRunner);
+        builder.Services.AddSingleton<CoreLoop>();
 
 #if DEBUG
         builder.Logging.AddDebug();
