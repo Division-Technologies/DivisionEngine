@@ -1,6 +1,8 @@
 <Solution>
   <Project Path="DivisionEngine.Authoring/DivisionEngine.Authoring.csproj" />
+  <Project Path="DivisionEngine.Editor/DivisionEngine.Editor.csproj" />
   <Project Path="DivisionEngine.Generators/DivisionEngine.Generators/DivisionEngine.Generators.csproj" />
+  <Project Path="DivisionEngine.Player/DivisionEngine.Player.csproj" />
   <Project Path="DivisionEngine.Tests/DivisionEngine.Tests.csproj" />
   <Project Path="DivisionEngine/DivisionEngine.csproj" />
 </Solution>
