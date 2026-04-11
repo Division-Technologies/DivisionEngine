@@ -1,0 +1,155 @@
+﻿using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Text;
+using VYaml.Emitter;
+
+namespace DivisionEngine;
+
+internal ref struct YamlSerializer(Utf8YamlEmitter emitter) : IContainerSerializer
+{
+    private Utf8YamlEmitter _emitter = emitter;
+    private Stack<YamlSerializationModeKind>? _modes;
+
+    private void WriteKey(int id, ReadOnlySpan<byte> hintUtf8)
+    {
+        if ((_modes?.TryPeek(out var mode) ?? false) && mode == YamlSerializationModeKind.Sequence) return;
+        _emitter.WriteRaw("# "u8, true, false);
+        _emitter.WriteRaw(hintUtf8, false, true);
+        _emitter.WriteString(id.ToString());
+    }
+
+    public void Bool(int id, ReadOnlySpan<byte> hintUtf8, bool value)
+    {
+        WriteKey(id, hintUtf8);
+        _emitter.WriteBool(value);
+    }
+
+    public void I8(int id, ReadOnlySpan<byte> hintUtf8, sbyte value)
+    {
+        WriteKey(id, hintUtf8);
+        _emitter.WriteInt32(value);
+    }
+
+    public void I16(int id, ReadOnlySpan<byte> hintUtf8, short value)
+    {
+        WriteKey(id, hintUtf8);
+        _emitter.WriteInt32(value);
+    }
+
+    public void I32(int id, ReadOnlySpan<byte> hintUtf8, int value)
+    {
+        WriteKey(id, hintUtf8);
+        _emitter.WriteInt32(value);
+    }
+
+    public void I64(int id, ReadOnlySpan<byte> hintUtf8, long value)
+    {
+        WriteKey(id, hintUtf8);
+        _emitter.WriteInt64(value);
+    }
+
+    public void F32(int id, ReadOnlySpan<byte> hintUtf8, float value)
+    {
+        WriteKey(id, hintUtf8);
+        _emitter.WriteFloat(value);
+    }
+
+    public void F64(int id, ReadOnlySpan<byte> hintUtf8, double value)
+    {
+        WriteKey(id, hintUtf8);
+        _emitter.WriteDouble(value);
+    }
+
+    public void Blob(int id, ReadOnlySpan<byte> hintUtf8, scoped ReadOnlySpan<byte> value, BlobKind kind)
+    {
+        WriteKey(id, hintUtf8);
+        _emitter.BeginMapping();
+        _emitter.WriteString("0");
+        _emitter.WriteInt32((int)kind);
+        _emitter.WriteString("1");
+        switch (kind)
+        {
+            case BlobKind.ByteArray:
+            {
+                // base64
+                _emitter.WriteString(Convert.ToBase64String(value));
+                break;
+            }
+            case BlobKind.Utf8:
+            {
+                _emitter.WriteString(Encoding.UTF8.GetString(value));
+                break;
+            }
+            case BlobKind.Utf16:
+            {
+                _emitter.WriteString(MemoryMarshal.Cast<byte, char>(MemoryMarshal.CreateReadOnlySpan(in value[0], value.Length)));
+                break;
+            }
+            default:
+                throw new ArgumentOutOfRangeException(nameof(kind), kind, null);
+        }
+
+        _emitter.EndMapping();
+    }
+
+    public void BeginArray(int id, ReadOnlySpan<byte> hintUtf8, int length)
+    {
+        WriteKey(id, hintUtf8);
+        _modes ??= new Stack<YamlSerializationModeKind>();
+        _modes.Push(YamlSerializationModeKind.Sequence);
+        _emitter.BeginMapping();
+        _emitter.WriteString("0");
+        _emitter.WriteInt32(length);
+        _emitter.WriteString("1");
+        _emitter.BeginSequence();
+    }
+
+    public void EndArray()
+    {
+        _emitter.EndSequence();
+        _emitter.EndMapping();
+        _modes!.Pop();
+    }
+
+    public void BeginStruct(int id, ReadOnlySpan<byte> hintUtf8)
+    {
+        WriteKey(id, hintUtf8);
+        _modes ??= new Stack<YamlSerializationModeKind>();
+        _modes.Push(YamlSerializationModeKind.Mapping);
+        _emitter.BeginMapping();
+    }
+
+    public void EndStruct()
+    {
+        _emitter.EndMapping();
+        _modes!.Pop();
+    }
+
+    public void ObjectReference(int id, ReadOnlySpan<byte> hintUtf8, ISerializableObject value)
+    {
+        _emitter.BeginMapping();
+        _emitter.WriteString("0");
+        _emitter.WriteString(value.Scope.Id.Value.ToString("N"));
+        _emitter.WriteString("1");
+        _emitter.WriteInt32(value.Id.Value);
+        _emitter.EndMapping();
+    }
+
+    public void BeginObject(LocalId id, Type type)
+    {
+        _emitter.BeginMapping();
+        _emitter.WriteString("0");
+        _emitter.WriteInt32(id.Value);
+        _emitter.WriteString("1");
+        _emitter.WriteString(type.FullName ??
+                             throw new InvalidOperationException($"Type {type} does not have a full name."));
+        _emitter.WriteString("2");
+        _emitter.BeginMapping();
+    }
+
+    public void EndObject()
+    {
+        _emitter.EndMapping();
+        _emitter.EndMapping();
+    }
+}
