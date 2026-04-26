@@ -1,0 +1,14 @@
+{
+    "editor.formatOnSave": true,
+    "editor.formatOnPaste": true,
+    "files.autoSave": "off",
+    "editor.formatOnSaveMode": "file",
+    "[cpp]": {
+        "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
+    },
+    "clangd.arguments": [
+        "--compile-commands-dir=build",
+        "--clang-tidy",
+        "--log=verbose"
+    ]
+}

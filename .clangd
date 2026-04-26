@@ -1,0 +1,11 @@
+CompileFlags:
+  CompilationDatabase: build
+Diagnostics:
+  ClangTidy:
+    Add:
+      - bugprone-*
+      - performance-*
+      - clang-analyzer-*
+      - cppcoreguidelines-*
+      - readability-identifier-naming
+    FastCheckFilter: Strict

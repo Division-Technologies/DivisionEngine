@@ -11,7 +11,7 @@
       "displayName": "Clang Debug",
       "description": "Configure a Debug build with Ninja and Clang from PATH.",
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/clang-debug",
+      "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_CXX_COMPILER": "clang++"
