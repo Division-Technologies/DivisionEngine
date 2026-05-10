@@ -11,7 +11,7 @@
       "displayName": "Clang Debug",
       "description": "Configure a Debug build with Ninja and Clang from PATH.",
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build",
+      "binaryDir": "${sourceDir}/build/clang-debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_CXX_COMPILER": "clang++"
@@ -37,6 +37,32 @@
     {
       "name": "clang-release",
       "configurePreset": "clang-release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "clang-debug",
+      "configurePreset": "clang-debug",
+      "output": {
+        "outputOnFailure": true,
+        "verbosity": "default"
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": false
+      }
+    },
+    {
+      "name": "clang-release",
+      "configurePreset": "clang-release",
+      "output": {
+        "outputOnFailure": true,
+        "verbosity": "default"
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": false
+      }
     }
   ]
 }
