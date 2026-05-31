@@ -8,15 +8,24 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Collect source files without main.cpp.
 set(SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/source)
+set(INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include)
 file(GLOB_RECURSE LIB_SOURCES CONFIGURE_DEPENDS
-     "${SOURCE_DIR}/*.c*" "${SOURCE_DIR}/*.h*")
+     "${SOURCE_DIR}/*.cpp" "${SOURCE_DIR}/*.h*")
 list(FILTER LIB_SOURCES EXCLUDE REGEX ".*/main.cpp$")
+
+# Collect C++20 module interface units (.ixx).
+file(GLOB_RECURSE LIB_MODULES CONFIGURE_DEPENDS
+     "${SOURCE_DIR}/*.ixx" "${INCLUDE_DIR}/*.ixx")
 
 # add library
 add_library(core ${LIB_SOURCES})
+target_sources(core
+    PUBLIC
+        FILE_SET cxx_modules TYPE CXX_MODULES FILES ${LIB_MODULES}
+)
 target_include_directories(core
-    PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/include
-    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/source
+    PUBLIC  ${INCLUDE_DIR}
+    PRIVATE ${SOURCE_DIR}
 )
 
 # executeable
