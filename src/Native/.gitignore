@@ -37,3 +37,7 @@ CMakeUserPresets.json
 # Test logs and temporary files
 *.log
 *.tmp
+
+# Claude
+.claude/settings.local.json
+.claude/cache/
