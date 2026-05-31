@@ -1,0 +1,43 @@
+# CMake build trees
+/build/
+/build-*/
+/out/
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+
+# User-local CMake presets
+CMakeUserPresets.json
+
+# clangd cache
+.cache/
+
+# VS Code local workspace files
+.vscode/*
+!.vscode/settings.json
+
+# Build outputs
+*.exe
+*.dll
+*.lib
+*.exp
+*.pdb
+*.obj
+*.o
+*.a
+*.so
+*.dylib
+*.ilk
+
+# Test logs and temporary files
+*.log
+*.tmp
+
+# Claude
+.claude/settings.local.json
+.claude/cache/

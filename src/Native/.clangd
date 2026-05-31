@@ -1,0 +1,25 @@
+# clangd 設定ファイル
+# https://clangd.llvm.org/config
+
+# コンパイルフラグの設定
+CompileFlags:
+  # compile_commands.jsonが置かれているディレクトリ
+  # CMakeがCMAKE_EXPORT_COMPILE_COMMANDS=ONで生成する
+  CompilationDatabase: build/clang-debug
+
+# 診断（エラー・警告）の設定
+Diagnostics:
+  # clang-tidy による静的解析
+  ClangTidy:
+    # 有効化するチェック項目
+    Add:
+      - bugprone-*              # バグの温床になりやすいコードの検出
+      - performance-*           # パフォーマンス上の問題の検出
+      - clang-analyzer-*        # Clang Static Analyzer による解析
+      - cppcoreguidelines-*     # C++ Core Guidelines への準拠チェック
+      - readability-identifier-naming  # 命名規則のチェック
+    # 遅いチェックを除外するフィルターの強さ(チェック自体の厳しさではない)
+    # Strict(デフォルト): 遅い可能性のあるチェックを厳しく除外 → 速いチェックのみ残る
+    # Loose: 非常に遅いチェックだけ除外
+    # None: 除外しない(全チェック実行)
+    FastCheckFilter: Strict
