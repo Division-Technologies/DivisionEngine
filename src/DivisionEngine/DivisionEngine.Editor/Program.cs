@@ -1,19 +1,21 @@
-﻿using ConsoleAppFramework;
+using ConsoleAppFramework;
 using DivisionEngine;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
-Console.WriteLine();
-Console.Write(">");
-var app = ConsoleApp.Create();
+var builder = Host.CreateApplicationBuilder();
+
+
+var app = builder.ToConsoleAppBuilder();
 app.Add<Commands>();
 await app.RunAsync(args);
 
 internal class Commands
 {
     [Command("")]
-    public void Root(string projectPath)
+    public async Task Root(string projectPath, [FromServices] ILogger<Program> logger, CancellationToken ct)
     {
-
-        var engine = new Engine();
+        var engine = new Engine(logger);
         engine.Main();
     }
 }
