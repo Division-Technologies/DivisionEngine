@@ -1,33 +1,21 @@
-﻿using System.IO.Pipelines;
-using System.Runtime.CompilerServices;
-using ValueTaskSupplement;
-
 namespace DivisionEngine;
 
+/// <summary>
+///     Scope-level serialization entry point. [AutoSerialization] generates explicit
+///     implementations of these members; field values are dispatched through
+///     <see cref="FormatterStore{T}" />.
+///     Serializers are mutable ref structs and must always be passed by ref — a by-value copy
+///     forks the underlying writer/parser state.
+/// </summary>
 public interface ISerializable
 {
-    void Serialize<T>(T serializer) where T : ISerializer, allows ref struct
+    void Serialize<T>(ref T serializer) where T : ISerializer, allows ref struct
     {
         throw new NotImplementedException();
     }
 
-    void Deserialize<T>(T deserializer) where T : IDeserializer, allows ref struct
+    void Deserialize<T>(ref T deserializer) where T : IDeserializer, allows ref struct
     {
         throw new NotImplementedException();
-    }
-}
-
-public interface ISerializable<T> : ISerializable where T : class, ISerializable<T>, new()
-{
-    static abstract IFormatter<T> Formatter { get; }
-
-    void ISerializable.Serialize<TSerializer>(TSerializer serializer)
-    {
-        T.Formatter.Serialize(serializer, (T)this);
-    }
-
-    void ISerializable.Deserialize<TDeserializer>(TDeserializer deserializer)
-    {
-        T.Formatter.Deserialize(deserializer, (T)this);
     }
 }

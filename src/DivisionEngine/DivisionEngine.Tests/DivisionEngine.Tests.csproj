@@ -21,4 +21,10 @@
         <Using Include="NUnit.Framework"/>
     </ItemGroup>
 
+    <ItemGroup>
+        <ProjectReference Include="..\DivisionEngine\DivisionEngine.csproj"/>
+        <ProjectReference Include="..\DivisionEngine.Authoring\DivisionEngine.Authoring.csproj"/>
+        <ProjectReference Include="..\DivisionEngine.Generators\DivisionEngine.Generators\DivisionEngine.Generators.csproj" PrivateAssets="all" ReferenceOutputAssembly="false" OutputItemType="Analyzer"/>
+    </ItemGroup>
+
 </Project>

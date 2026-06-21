@@ -5,16 +5,20 @@ using VYaml.Emitter;
 
 namespace DivisionEngine;
 
+// Mutable ref struct — always pass by ref. By-value copies fork the emitter state and corrupt
+// the output (ISerializable/IValueFormatter take serializers as ref parameters for this reason).
 internal ref struct YamlSerializer(Utf8YamlEmitter emitter) : IContainerSerializer
 {
     private Utf8YamlEmitter _emitter = emitter;
     private Stack<YamlSerializationModeKind>? _modes;
+    private bool _hasDocument;
 
     private void WriteKey(int id, ReadOnlySpan<byte> hintUtf8)
     {
         if ((_modes?.TryPeek(out var mode) ?? false) && mode == YamlSerializationModeKind.Sequence) return;
-        _emitter.WriteRaw("# "u8, true, false);
-        _emitter.WriteRaw(hintUtf8, false, true);
+        // NOTE: hint comments cannot be emitted here — WriteRaw right after a pending key
+        // produces `"key":# hint`, where '#' (not preceded by whitespace) is not a comment
+        // and corrupts the document.
         _emitter.WriteString(id.ToString());
     }
 
@@ -82,7 +86,11 @@ internal ref struct YamlSerializer(Utf8YamlEmitter emitter) : IContainerSerializ
             }
             case BlobKind.Utf16:
             {
-                _emitter.WriteString(MemoryMarshal.Cast<byte, char>(MemoryMarshal.CreateReadOnlySpan(in value[0], value.Length)));
+                if (value.IsEmpty)
+                    _emitter.WriteString("");
+                else
+                    _emitter.WriteString(
+                        MemoryMarshal.Cast<byte, char>(MemoryMarshal.CreateReadOnlySpan(in value[0], value.Length)));
                 break;
             }
             default:
@@ -125,18 +133,24 @@ internal ref struct YamlSerializer(Utf8YamlEmitter emitter) : IContainerSerializ
         _modes!.Pop();
     }
 
-    public void ObjectReference(int id, ReadOnlySpan<byte> hintUtf8, ISerializableObject value)
+    public void ObjectReference(int id, ReadOnlySpan<byte> hintUtf8, ISerializableObject? value)
     {
+        WriteKey(id, hintUtf8);
         _emitter.BeginMapping();
         _emitter.WriteString("0");
-        _emitter.WriteString(value.Scope.Id.Value.ToString("N"));
+        _emitter.WriteString(value?.Scope.Id.Value.ToString("N") ?? Guid.Empty.ToString("N"));
         _emitter.WriteString("1");
-        _emitter.WriteInt32(value.Id.Value);
+        _emitter.WriteInt32(value?.Id.Value ?? -1);
         _emitter.EndMapping();
     }
 
     public void BeginObject(LocalId id, Type type)
     {
+        // Each object is its own YAML document — multiple root mappings in one document
+        // are not valid YAML, so separate them with an explicit document marker.
+        if (_hasDocument) _emitter.WriteRaw("---"u8, false, true);
+        _hasDocument = true;
+
         _emitter.BeginMapping();
         _emitter.WriteString("0");
         _emitter.WriteInt32(id.Value);

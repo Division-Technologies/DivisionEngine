@@ -1,4 +1,4 @@
-﻿using System.Buffers;
+using System.Buffers;
 using VYaml.Emitter;
 using VYaml.Parser;
 
@@ -7,7 +7,7 @@ namespace DivisionEngine;
 public sealed class SerializationScope : IDisposable
 {
     private readonly Dictionary<LocalId, ISerializableObject> _objects = new();
-    private readonly ISerializationScopeLoader _loader;
+    private ISerializationScopeLoader _loader;
 
     internal SerializationScope(ScopeId id, ISerializationScopeLoader loader)
     {
@@ -68,6 +68,13 @@ public sealed class SerializationScope : IDisposable
         _loader.Deserialize(obj, resolver);
     }
 
+    internal void Reload(ISerializationScopeLoader loader, ISerializedObjectResolver resolver)
+    {
+        _loader.Dispose();
+        _loader = loader;
+        foreach (var (_, obj) in _objects) _loader.Deserialize(obj, resolver);
+    }
+
     internal void Transfer(SerializationScope source, ISerializedObjectResolver resolver)
     {
         var writer = new ArrayBufferWriter<byte>();
@@ -76,11 +83,11 @@ public sealed class SerializationScope : IDisposable
             if (!_objects.TryGetValue(localId, out var newObj)) continue;
             var emitter = new Utf8YamlEmitter(writer);
             var serializer = new YamlSerializer(emitter);
-            old.Serialize(serializer);
+            old.Serialize(ref serializer);
 
             var parser = new YamlParser(new ReadOnlySequence<byte>(writer.WrittenMemory));
             var deserializer = new YamlDeserializer(parser, resolver);
-            newObj.Deserialize(deserializer);
+            newObj.Deserialize(ref deserializer);
         }
     }
 }

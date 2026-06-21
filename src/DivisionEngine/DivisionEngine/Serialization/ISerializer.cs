@@ -10,7 +10,7 @@ public interface ISerializer
     void F32(int id, ReadOnlySpan<byte> hintUtf8, float value);
     void F64(int id, ReadOnlySpan<byte> hintUtf8, double value);
     void Blob(int id, ReadOnlySpan<byte> hintUtf8, scoped ReadOnlySpan<byte> value, BlobKind kind);
-    void ObjectReference(int id, ReadOnlySpan<byte> hintUtf8, ISerializableObject value);
+    void ObjectReference(int id, ReadOnlySpan<byte> hintUtf8, ISerializableObject? value);
     void BeginArray(int id, ReadOnlySpan<byte> hintUtf8, int length);
     void EndArray();
     void BeginStruct(int id, ReadOnlySpan<byte> hintUtf8);

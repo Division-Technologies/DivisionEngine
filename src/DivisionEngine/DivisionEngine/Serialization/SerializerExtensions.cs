@@ -1,4 +1,4 @@
-﻿using System.Buffers;
+using System.Buffers;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -6,13 +6,13 @@ namespace DivisionEngine;
 
 public static class SerializerExtensions
 {
-    public static void Utf16<T>(this T serializer, int id, ReadOnlySpan<byte> hintUtf8, ReadOnlySpan<char> value)
+    public static void Utf16<T>(ref T serializer, int id, ReadOnlySpan<byte> hintUtf8, ReadOnlySpan<char> value)
         where T : ISerializer, allows ref struct
     {
         serializer.Blob(id, hintUtf8, MemoryMarshal.Cast<char, byte>(value), BlobKind.Utf16);
     }
 
-    public static void Utf8<T>(this T serializer, int id, ReadOnlySpan<byte> hintUtf8, ReadOnlySpan<char> value)
+    public static void Utf8<T>(ref T serializer, int id, ReadOnlySpan<byte> hintUtf8, ReadOnlySpan<char> value)
         where T : ISerializer, allows ref struct
     {
         var utf8 = Encoding.UTF8;

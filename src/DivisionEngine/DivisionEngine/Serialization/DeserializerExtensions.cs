@@ -1,10 +1,10 @@
-﻿using System.Text;
+using System.Text;
 
 namespace DivisionEngine;
 
 public static class DeserializerExtensions
 {
-    public static string String<T>(this T deserializer, int id, ReadOnlySpan<byte> hintUtf8)
+    public static string String<T>(ref T deserializer, int id, ReadOnlySpan<byte> hintUtf8)
         where T : IDeserializer, allows ref struct
     {
         var bytes = deserializer.Blob(id, hintUtf8, out var kind);

@@ -4,6 +4,7 @@ using VYaml.Parser;
 
 namespace DivisionEngine;
 
+// Mutable ref struct — always pass by ref. See the note on YamlSerializer.
 internal ref struct YamlDeserializer(YamlParser parser, ISerializedObjectResolver? resolver) : IContainerDeserializer
 {
     private YamlParser _parser = parser;
@@ -144,6 +145,7 @@ internal ref struct YamlDeserializer(YamlParser parser, ISerializedObjectResolve
             return false;
         }
 
+        _parser.Read(); // enter the sequence
         _modes ??= new Stack<YamlSerializationModeKind>();
         _modes.Push(YamlSerializationModeKind.Sequence);
         return true;
@@ -156,6 +158,9 @@ internal ref struct YamlDeserializer(YamlParser parser, ISerializedObjectResolve
         while (_parser.CurrentEventType != ParseEventType.SequenceEnd) _parser.SkipCurrentNode();
 
         _parser.Read();
+
+        // TryBeginArray framed the sequence inside a {length, elements} mapping — close it too
+        EndStruct();
     }
 
     public bool TryBeginStruct(int id, ReadOnlySpan<byte> hintUtf8)
@@ -184,8 +189,36 @@ internal ref struct YamlDeserializer(YamlParser parser, ISerializedObjectResolve
         _parser.Read();
     }
 
+    /// <summary>
+    ///     Advances the parser past stream/document framing events to the next content node.
+    /// </summary>
+    private bool SkipToContent()
+    {
+        while (true)
+            switch (_parser.CurrentEventType)
+            {
+                case ParseEventType.Nothing:
+                case ParseEventType.StreamStart:
+                case ParseEventType.DocumentStart:
+                case ParseEventType.DocumentEnd:
+                    if (!_parser.Read()) return false;
+                    continue;
+                case ParseEventType.StreamEnd:
+                    return false;
+                default:
+                    return true;
+            }
+    }
+
     public bool TryBeginObject(out LocalId id, [NotNullWhen(true)] out Type? type)
     {
+        if (!SkipToContent())
+        {
+            id = default;
+            type = null;
+            return false;
+        }
+
         _modes ??= new Stack<YamlSerializationModeKind>();
         _modes.Push(YamlSerializationModeKind.Sequence);
         if (!TryBeginStruct(0, []))
@@ -197,8 +230,10 @@ internal ref struct YamlDeserializer(YamlParser parser, ISerializedObjectResolve
         }
 
         id = new LocalId(I32(0, "id"u8));
-        type = Type.GetType(_parser.ReadScalarAsString() ?? throw new InvalidOperationException());
-        if (type == null || !TryBeginStruct(1, "value"u8))
+        type = TryRead(1, "type"u8)
+            ? ResolveType(_parser.ReadScalarAsString() ?? throw new InvalidOperationException())
+            : null;
+        if (type == null || !TryBeginStruct(2, "value"u8))
         {
             EndStruct();
             _modes.Pop();
@@ -215,5 +250,22 @@ internal ref struct YamlDeserializer(YamlParser parser, ISerializedObjectResolve
         EndStruct();
         EndStruct();
         _modes!.Pop();
+    }
+
+    /// <summary>
+    ///     Objects are serialized with Type.FullName (assembly-agnostic, hot-reload friendly);
+    ///     Type.GetType only searches the calling assembly and mscorlib, so fall back to
+    ///     scanning loaded assemblies.
+    /// </summary>
+    private static Type? ResolveType(string name)
+    {
+        if (Type.GetType(name) is { } type) return type;
+        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            if (assembly.IsDynamic) continue;
+            if (assembly.GetType(name) is { } found) return found;
+        }
+
+        return null;
     }
 }

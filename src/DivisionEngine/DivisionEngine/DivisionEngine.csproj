@@ -4,16 +4,24 @@
         <TargetFramework>net10.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     </PropertyGroup>
 
     <ItemGroup>
         <PackageReference Include="MemoryPack" Version="1.21.4"/>
+        <PackageReference Include="Microsoft.Extensions.Logging" Version="11.0.0-preview.4.26230.115"/>
+        <PackageReference Include="System.IO.Hashing" Version="11.0.0-preview.3.26207.106"/>
         <PackageReference Include="ValueTaskSupplement" Version="1.1.0"/>
         <PackageReference Include="VYaml" Version="1.2.0"/>
     </ItemGroup>
 
     <ItemGroup>
         <ProjectReference Include="..\DivisionEngine.Generators\DivisionEngine.Generators\DivisionEngine.Generators.csproj" PrivateAssets="all" ReferenceOutputAssembly="false" OutputItemType="Analyzer"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="DivisionEngine.Authoring"/>
+        <InternalsVisibleTo Include="DivisionEngine.Tests"/>
     </ItemGroup>
 
 </Project>
