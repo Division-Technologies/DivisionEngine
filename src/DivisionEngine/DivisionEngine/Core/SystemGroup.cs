@@ -8,4 +8,7 @@ public class SystemGroup : ISystem
     {
         foreach (var system in Systems) system.Execute(ref ctx);
     }
+
+    /// <summary>Adds a child system, executed after the systems already in the group.</summary>
+    public void Add(ISystem system) => Systems.Add(system);
 }
