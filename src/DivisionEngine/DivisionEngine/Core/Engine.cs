@@ -17,7 +17,7 @@ public sealed class Engine(ILogger logger)
         _rootSystemGroup.Add(system);
     }
 
-    public void Main()
+    public void Main(CancellationToken ct = default)
     {
         var sc = new DivisionSynchronizationContext();
         SynchronizationContext.SetSynchronizationContext(sc);
@@ -25,6 +25,7 @@ public sealed class Engine(ILogger logger)
 
         while (true)
         {
+            ct.ThrowIfCancellationRequested();
             sc.Update();
             var frameContext = new FrameContext(ref time, Realtime.Current, this);
             _rootSystemGroup.Execute(ref frameContext);

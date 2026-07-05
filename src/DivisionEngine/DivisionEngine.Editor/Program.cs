@@ -36,6 +36,6 @@ internal class Commands
         // changed user assemblies (migrating live state). Order matters — refresh flags the reload.
         engine.AddSystem(new AssetRefreshSystem(assets));
         engine.AddSystem(new ScriptReloadSystem(assets, scriptHost));
-        engine.Main();
+        engine.Main(ct);
     }
 }

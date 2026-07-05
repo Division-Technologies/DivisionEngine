@@ -330,7 +330,7 @@ public sealed class AssetDatabase : IDisposable
 
         var metaPath = path + ".meta";
         var meta = File.Exists(metaPath) ? AssetMeta.Read(metaPath) : null;
-        var importer = meta?.Importer ?? AssetImporterRegistry.Resolve(Path.GetExtension(path));
+        var importer = ResolveImporter(meta, path);
         if (importer is null) return;
 
         var guid = meta is not null ? new ScopeId(meta.Guid) : ScopeId.New();
@@ -355,7 +355,7 @@ public sealed class AssetDatabase : IDisposable
 
         var metaPath = path + ".meta";
         var meta = File.Exists(metaPath) ? AssetMeta.Read(metaPath) : null;
-        var importer = meta?.Importer ?? AssetImporterRegistry.Resolve(Path.GetExtension(path));
+        var importer = ResolveImporter(meta, path);
         if (importer is null) return null;
 
         var guid = meta is not null ? new ScopeId(meta.Guid) : ScopeId.New();
@@ -410,33 +410,46 @@ public sealed class AssetDatabase : IDisposable
         _scopeFile[guid] = path;
     }
 
-    /// <summary>Applies a single queued change: re-import an importable asset, or reload a direct one.</summary>
+    /// <summary>Applies a single queued change: re-import an asset (or reload a direct one) and any dependents.</summary>
     private void ProcessChange(string path)
     {
         path = Normalize(path);
         if (!File.Exists(path)) return;
 
-        var metaPath = path + ".meta";
-        var importable = AssetImporterRegistry.Resolve(Path.GetExtension(path)) is not null ||
-                         (File.Exists(metaPath) && AssetMeta.Read(metaPath).Importer is not null);
+        // Re-import assets that consume this file as an input (e.g. a .cs behind a .csproj). This runs
+        // independently of whether the file is itself an asset, so a script edit still rebuilds its
+        // project even though the .cs is also imported (as a binary asset) below.
+        if (_fileDependents.TryGetValue(path, out var dependents))
+            foreach (var dependent in dependents.ToArray())
+                if (GetPath(dependent) is { } dependentPath)
+                    Reimport(dependentPath);
 
-        if (importable)
+        var metaPath = path + ".meta";
+        var meta = File.Exists(metaPath) ? AssetMeta.Read(metaPath) : null;
+
+        if (ResolveImporter(meta, path) is not null)
         {
             Reimport(path);
         }
-        else if (File.Exists(metaPath))
+        else if (meta is not null)
         {
             RegisterDirect(path);
             if (GetGuid(path) is { } guid && _scopes.TryGetValue(guid, out var scope))
                 ReloadInPlace(guid, scope, path);
         }
-        else if (_fileDependents.TryGetValue(path, out var dependents))
-        {
-            // The changed file is an input (e.g. a .cs) of one or more assets — re-import them.
-            foreach (var dependent in dependents.ToArray())
-                if (GetPath(dependent) is { } dependentPath)
-                    Reimport(dependentPath);
-        }
+    }
+
+    /// <summary>
+    ///     Chooses the importer for a source file: the one recorded in its <c>.meta</c>, else the one
+    ///     registered for its extension, else — for an uncovered extension with no <c>.meta</c> — the
+    ///     raw binary fallback. Returns null only for a direct asset (a <c>.meta</c> with no importer).
+    /// </summary>
+    private static IAssetImporter? ResolveImporter(AssetMeta? meta, string path)
+    {
+        if (meta?.Importer is not null) return meta.Importer;
+        if (AssetImporterRegistry.Resolve(Path.GetExtension(path)) is { } specific) return specific;
+        if (meta is not null) return null;
+        return RawBinaryImporter.Instance;
     }
 
     /// <summary>Re-deserializes a scope's existing instances from <paramref name="file" />, preserving identity.</summary>
