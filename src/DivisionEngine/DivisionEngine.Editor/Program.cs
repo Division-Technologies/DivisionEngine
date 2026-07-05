@@ -29,9 +29,13 @@ internal class Commands
             assets.AllAssets.Count, assetsRoot);
         assets.StartWatching();
 
+        var scriptHost = new ScriptHost();
+
         var engine = new Engine(logger);
-        // Apply pending asset changes (queued by the watcher) once per frame, on the engine thread.
+        // Each frame: apply queued file changes (recompiling changed scripts), then reload any
+        // changed user assemblies (migrating live state). Order matters — refresh flags the reload.
         engine.AddSystem(new AssetRefreshSystem(assets));
+        engine.AddSystem(new ScriptReloadSystem(assets, scriptHost));
         engine.Main();
     }
 }

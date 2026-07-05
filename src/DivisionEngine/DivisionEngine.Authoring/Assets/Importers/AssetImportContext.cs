@@ -10,12 +10,15 @@ namespace DivisionEngine.Authoring.Assets;
 public sealed class AssetImportContext
 {
     private readonly List<ScopeId> _dependencies = new();
+    private readonly List<string> _inputFiles = new();
+    private readonly string _artifactDirectory;
     private readonly SerializationScope _scope;
 
-    internal AssetImportContext(string sourcePath, SerializationScope scope)
+    internal AssetImportContext(string sourcePath, SerializationScope scope, string artifactDirectory)
     {
         SourcePath = sourcePath;
         _scope = scope;
+        _artifactDirectory = artifactDirectory;
     }
 
     /// <summary>Absolute path of the source file being imported.</summary>
@@ -26,6 +29,9 @@ public sealed class AssetImportContext
 
     /// <summary>Assets this import depends on; a change to any of them re-triggers this import.</summary>
     public IReadOnlyList<ScopeId> Dependencies => _dependencies;
+
+    /// <summary>Extra source files consumed by this import; a change to any of them re-triggers it.</summary>
+    public IReadOnlyList<string> InputFiles => _inputFiles;
 
     /// <summary>Opens the source file for reading.</summary>
     public Stream OpenSource() => File.OpenRead(SourcePath);
@@ -45,4 +51,19 @@ public sealed class AssetImportContext
 
     /// <summary>Records a dependency on another asset by GUID.</summary>
     public void DependsOnAsset(ScopeId guid) => _dependencies.Add(guid);
+
+    /// <summary>Records a dependency on a source file (not itself an asset), e.g. a compiled .cs file.</summary>
+    public void DependsOnFile(string path) => _inputFiles.Add(Path.GetFullPath(path));
+
+    /// <summary>Full path of a named build artifact (e.g. a compiled DLL) in this asset's artifact dir.</summary>
+    public string ArtifactPath(string name) => Path.Combine(_artifactDirectory, name);
+
+    /// <summary>Writes a named build artifact to this asset's artifact directory and returns its path.</summary>
+    public string WriteArtifact(string name, byte[] data)
+    {
+        Directory.CreateDirectory(_artifactDirectory);
+        var path = ArtifactPath(name);
+        File.WriteAllBytes(path, data);
+        return path;
+    }
 }

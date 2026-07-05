@@ -23,6 +23,13 @@ public sealed class AssetMeta
     public List<Guid> Dependencies = new();
 
     /// <summary>
+    ///     Extra source files this import consumed (beyond the source asset itself), stored relative to
+    ///     the source file's directory. Their combined content feeds <see cref="SourceHash" /> so a
+    ///     change to any of them invalidates the cache (e.g. the .cs files compiled by a .csproj).
+    /// </summary>
+    public List<string> InputFiles = new();
+
+    /// <summary>
     ///     Reads a <c>.meta</c> file: a header document followed by the importer serialized as a typed
     ///     document (so its concrete type and settings are restored).
     /// </summary>
@@ -54,6 +61,7 @@ public sealed class AssetMeta
             ImporterVersion = header.ImporterVersion,
             MainLocalId = header.MainLocalId,
             Dependencies = header.Dependencies,
+            InputFiles = header.InputFiles,
             Importer = importer
         };
     }
@@ -75,7 +83,8 @@ public sealed class AssetMeta
             SourceHash = meta.SourceHash,
             ImporterVersion = meta.ImporterVersion,
             MainLocalId = meta.MainLocalId,
-            Dependencies = meta.Dependencies
+            Dependencies = meta.Dependencies,
+            InputFiles = meta.InputFiles
         };
         serializer.BeginObject(new LocalId(0), typeof(AssetMetaHeader));
         ((ISerializable)header).Serialize(ref serializer);
@@ -102,4 +111,5 @@ internal partial class AssetMetaHeader
     [Serialize] public int ImporterVersion;
     [Serialize] public int MainLocalId;
     [Serialize] public List<Guid> Dependencies = new();
+    [Serialize] public List<string> InputFiles = new();
 }

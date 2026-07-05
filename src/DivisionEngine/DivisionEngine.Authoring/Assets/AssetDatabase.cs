@@ -21,6 +21,12 @@ public sealed class AssetDatabase : IDisposable
 {
     private readonly ImportCache _cache;
     private readonly AssetDependencyGraph _dependencies = new();
+
+    // Input source files (e.g. .cs) an asset consumed, and the reverse map file -> dependent assets.
+    // A change to such a file re-imports its dependents (the .csproj asset).
+    private readonly Dictionary<ScopeId, string[]> _assetInputs = new();
+    private readonly Dictionary<string, HashSet<ScopeId>> _fileDependents = new(StringComparer.OrdinalIgnoreCase);
+
     private readonly Dictionary<ScopeId, string> _guidToPath = new();
     private readonly Dictionary<ScopeId, ISerializationScopeLoader> _loaders = new();
     private readonly Dictionary<ScopeId, LocalId> _mainIds = new();
@@ -39,6 +45,13 @@ public sealed class AssetDatabase : IDisposable
     private readonly object _pendingGate = new();
 
     private AssetWatcher? _watcher;
+
+    // Set during script reload so every scope load resolves user types against the active user ALC.
+    private ITypeResolver? _typeResolver;
+
+    // Compiled user assemblies (guid -> DLL path) and whether a script (re)load is pending.
+    private readonly Dictionary<ScopeId, string> _scriptDlls = new();
+    private bool _scriptsDirty;
 
     /// <param name="cacheDirectory">Where imported asset caches are stored. Defaults to a temp folder.</param>
     public AssetDatabase(string? cacheDirectory = null)
@@ -249,6 +262,58 @@ public sealed class AssetDatabase : IDisposable
     /// </summary>
     public void Reimport(string path) => Reimport(Normalize(path), new HashSet<ScopeId>());
 
+    /// <summary>
+    ///     Reloads user (script) assemblies, migrating all live object state across the swap. Serializes
+    ///     every materialized scope, drops the live instances (so the old assemblies can be unloaded),
+    ///     swaps the user assembly context, then re-creates and re-deserializes the objects against the
+    ///     new types. Cross-object references are re-resolved by GlobalId, so they survive the reload.
+    ///     <para>External holders of references must re-acquire from the database after a reload.</para>
+    /// </summary>
+    /// <summary>Whether a compiled user assembly changed since the last script (re)load.</summary>
+    public bool ScriptsDirty => _scriptsDirty;
+
+    /// <summary>Reloads user assemblies if any changed since the last reload; otherwise a no-op.</summary>
+    public void ReloadScriptsIfDirty(ScriptHost host)
+    {
+        if (!_scriptsDirty) return;
+        _scriptsDirty = false;
+        ReloadScripts(host, _scriptDlls.Values.ToArray());
+    }
+
+    public void ReloadScripts(ScriptHost host, IReadOnlyList<string> dllPaths)
+    {
+        // 1. Serialize every materialized scope's current runtime state.
+        var saved = new Dictionary<ScopeId, byte[]>();
+        foreach (var (guid, scope) in _scopes)
+            if (scope.Objects.Count > 0)
+                saved[guid] = SerializeScope(scope);
+
+        // 2. Drop the live object graph so no engine->user references keep the old context alive.
+        foreach (var scope in _scopes.Values) scope.Dispose();
+        _scopes.Clear();
+        _loaders.Clear();
+
+        // 3. Swap the user assembly context; route all subsequent type resolution through it.
+        host.Swap(dllPaths);
+        _typeResolver = host.TypeResolver;
+
+        // 4. Rebuild the saved scopes from their serialized state, materializing with the new types.
+        foreach (var (guid, bytes) in saved)
+        {
+            var loader = new FileScopeLoader(bytes, _typeResolver);
+            _scopes[guid] = new SerializationScope(guid, loader);
+            _loaders[guid] = loader;
+            _mainIds[guid] = loader.MainId;
+        }
+
+        var resolver = new AssetResolver(this);
+        foreach (var guid in saved.Keys)
+            if (_loaders[guid] is FileScopeLoader loader)
+                foreach (var localId in loader.ObjectIds)
+                    resolver.Resolve(new GlobalId(guid, localId));
+        resolver.DrainPending();
+    }
+
     private void Reimport(string path, HashSet<ScopeId> visited)
     {
         if (!File.Exists(path)) return;
@@ -285,9 +350,10 @@ public sealed class AssetDatabase : IDisposable
 
         var guid = meta is not null ? new ScopeId(meta.Guid) : ScopeId.New();
         var cacheFile = _cache.PathFor(guid);
-        var sourceHash = ImportCache.Hash(File.ReadAllBytes(path));
+        var inputFiles = meta is not null ? ToAbsoluteInputs(path, meta.InputFiles) : [];
+        var sourceHash = ImportCache.CombinedHash(path, inputFiles);
 
-        // Cache hit: source and importer unchanged, and the cache file exists.
+        // Cache hit: source (and all declared inputs) and importer unchanged, and the cache exists.
         if (meta?.Importer is not null && meta.SourceHash == sourceHash &&
             meta.ImporterVersion == importer.Version && File.Exists(cacheFile))
         {
@@ -295,6 +361,8 @@ public sealed class AssetDatabase : IDisposable
             _scopeFile[guid] = cacheFile;
             _mainIds[guid] = new LocalId(meta.MainLocalId);
             _dependencies.SetDependencies(guid, meta.Dependencies.Select(g => new ScopeId(g)));
+            SetFileDependents(guid, inputFiles);
+            if (importer is CSharpProjectImporter) TrackScriptAsset(guid);
             return guid;
         }
 
@@ -303,7 +371,17 @@ public sealed class AssetDatabase : IDisposable
             ReloadInPlace(guid, scope, file);
         else
             RegisterImportedScope(guid, run);
+        if (importer is CSharpProjectImporter) TrackScriptAsset(guid);
         return guid;
+    }
+
+    /// <summary>Records the DLL of a compiled C# project and flags that a script reload is pending.</summary>
+    private void TrackScriptAsset(ScopeId guid)
+    {
+        if (LoadAsset<CompiledAssembly>(guid) is not { Success: true } compiled || compiled.DllPath.Length == 0)
+            return;
+        _scriptDlls[guid] = compiled.DllPath;
+        _scriptsDirty = true;
     }
 
     /// <summary>Synchronizes one file found during <see cref="Refresh" />: import it, or register a direct asset.</summary>
@@ -342,6 +420,13 @@ public sealed class AssetDatabase : IDisposable
             if (GetGuid(path) is { } guid && _scopes.TryGetValue(guid, out var scope))
                 ReloadInPlace(guid, scope, path);
         }
+        else if (_fileDependents.TryGetValue(path, out var dependents))
+        {
+            // The changed file is an input (e.g. a .cs) of one or more assets — re-import them.
+            foreach (var dependent in dependents.ToArray())
+                if (GetPath(dependent) is { } dependentPath)
+                    Reimport(dependentPath);
+        }
     }
 
     /// <summary>Re-deserializes a scope's existing instances from <paramref name="file" />, preserving identity.</summary>
@@ -349,7 +434,7 @@ public sealed class AssetDatabase : IDisposable
     {
         PreloadClosure(guid);
         var resolver = new AssetResolver(this);
-        var loader = new FileScopeLoader(File.ReadAllBytes(file));
+        var loader = new FileScopeLoader(File.ReadAllBytes(file), _typeResolver);
         scope.Reload(loader, resolver);
         resolver.DrainPending();
         _loaders[guid] = loader;
@@ -372,6 +457,39 @@ public sealed class AssetDatabase : IDisposable
         _scopeFile.Remove(guid);
         _guidToPath.Remove(guid);
         _dependencies.Remove(guid);
+        SetFileDependents(guid, []);
+        _assetInputs.Remove(guid);
+        if (_scriptDlls.Remove(guid)) _scriptsDirty = true;
+    }
+
+    /// <summary>Replaces the file -> dependent-asset edges for <paramref name="guid" />.</summary>
+    private void SetFileDependents(ScopeId guid, IReadOnlyList<string> inputFiles)
+    {
+        if (_assetInputs.TryGetValue(guid, out var previous))
+            foreach (var file in previous)
+                if (_fileDependents.TryGetValue(file, out var set))
+                    set.Remove(guid);
+
+        var inputs = inputFiles.Select(Normalize).ToArray();
+        _assetInputs[guid] = inputs;
+        foreach (var file in inputs)
+        {
+            if (!_fileDependents.TryGetValue(file, out var set))
+                _fileDependents[file] = set = new HashSet<ScopeId>();
+            set.Add(guid);
+        }
+    }
+
+    private static List<string> ToRelativeInputs(string sourcePath, IReadOnlyList<string> inputs)
+    {
+        var dir = Path.GetDirectoryName(sourcePath)!;
+        return inputs.Select(i => Path.GetRelativePath(dir, i)).ToList();
+    }
+
+    private static string[] ToAbsoluteInputs(string sourcePath, IReadOnlyList<string> relativeInputs)
+    {
+        var dir = Path.GetDirectoryName(sourcePath)!;
+        return relativeInputs.Select(r => Path.GetFullPath(Path.Combine(dir, r))).ToArray();
     }
 
     /// <summary>
@@ -381,23 +499,26 @@ public sealed class AssetDatabase : IDisposable
     private ImportRun RunImporter(string path, IAssetImporter importer, ScopeId guid)
     {
         var scope = new SerializationScope(guid, NullScopeLoader.Instance);
-        var context = new AssetImportContext(path, scope);
+        var context = new AssetImportContext(path, scope, _cache.ArtifactDirectory(guid));
         importer.Import(context);
         var mainId = context.MainObject?.Id ?? new LocalId(0);
         var cacheFile = _cache.PathFor(guid);
+        var inputFiles = context.InputFiles;
 
         _cache.Write(guid, SerializeScope(scope));
         AssetMeta.Write(path + ".meta", new AssetMeta
         {
             Guid = guid.Value,
             Importer = importer,
-            SourceHash = ImportCache.Hash(File.ReadAllBytes(path)),
+            SourceHash = ImportCache.CombinedHash(path, inputFiles),
             ImporterVersion = importer.Version,
             MainLocalId = mainId.Value,
-            Dependencies = context.Dependencies.Select(d => d.Value).ToList()
+            Dependencies = context.Dependencies.Select(d => d.Value).ToList(),
+            InputFiles = ToRelativeInputs(path, inputFiles)
         });
 
         _dependencies.SetDependencies(guid, context.Dependencies);
+        SetFileDependents(guid, inputFiles);
         Register(guid, path);
         _scopeFile[guid] = cacheFile;
 
@@ -413,7 +534,7 @@ public sealed class AssetDatabase : IDisposable
         if (_scopes.TryGetValue(guid, out var scope)) return scope;
         if (!_scopeFile.TryGetValue(guid, out var path)) return null;
 
-        var loader = new FileScopeLoader(File.ReadAllBytes(path));
+        var loader = new FileScopeLoader(File.ReadAllBytes(path), _typeResolver);
         scope = new SerializationScope(guid, loader);
         _scopes[guid] = scope;
         _loaders[guid] = loader;

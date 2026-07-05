@@ -5,9 +5,13 @@ using VYaml.Parser;
 namespace DivisionEngine;
 
 // Mutable ref struct — always pass by ref. See the note on YamlSerializer.
-internal ref struct YamlDeserializer(YamlParser parser, ISerializedObjectResolver? resolver) : IContainerDeserializer
+internal ref struct YamlDeserializer(
+    YamlParser parser,
+    ISerializedObjectResolver? resolver,
+    ITypeResolver? typeResolver = null) : IContainerDeserializer
 {
     private YamlParser _parser = parser;
+    private readonly ITypeResolver? _typeResolver = typeResolver;
     private Stack<YamlSerializationModeKind>? _modes;
 
     private bool TryReadNextId(out int id)
@@ -231,7 +235,7 @@ internal ref struct YamlDeserializer(YamlParser parser, ISerializedObjectResolve
 
         id = new LocalId(I32(0, "id"u8));
         type = TryRead(1, "type"u8)
-            ? ResolveType(_parser.ReadScalarAsString() ?? throw new InvalidOperationException())
+            ? ResolveType(_parser.ReadScalarAsString() ?? throw new InvalidOperationException(), _typeResolver)
             : null;
         if (type == null || !TryBeginStruct(2, "value"u8))
         {
@@ -257,8 +261,12 @@ internal ref struct YamlDeserializer(YamlParser parser, ISerializedObjectResolve
     ///     Type.GetType only searches the calling assembly and mscorlib, so fall back to
     ///     scanning loaded assemblies.
     /// </summary>
-    private static Type? ResolveType(string name)
+    private static Type? ResolveType(string name, ITypeResolver? typeResolver)
     {
+        // A custom resolver (script hot-reload) takes precedence so user types bind to the active
+        // user AssemblyLoadContext rather than a stale one still present in the AppDomain.
+        if (typeResolver?.Resolve(name) is { } resolved) return resolved;
+
         if (Type.GetType(name) is { } type) return type;
         foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
         {

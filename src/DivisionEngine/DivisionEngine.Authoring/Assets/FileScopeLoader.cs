@@ -19,15 +19,25 @@ public sealed class FileScopeLoader : ISerializationScopeLoader
 {
     private readonly byte[] _data;
     private readonly Dictionary<LocalId, Type> _index = new();
+    private readonly ITypeResolver? _typeResolver;
 
-    public FileScopeLoader(byte[] data)
+    /// <param name="data">The serialized scope (a stream of YAML object documents).</param>
+    /// <param name="typeResolver">
+    ///     Resolves object type names; pass the active user-ALC resolver during script reload so user
+    ///     types bind to the freshly loaded assemblies. Null uses the default AppDomain scan.
+    /// </param>
+    public FileScopeLoader(byte[] data, ITypeResolver? typeResolver = null)
     {
         _data = data;
+        _typeResolver = typeResolver;
         BuildIndex();
     }
 
     /// <summary>The id of the first object in the file — the scope's main/root object by convention.</summary>
     public LocalId MainId { get; private set; }
+
+    /// <summary>The ids of every object in the scope.</summary>
+    public IReadOnlyCollection<LocalId> ObjectIds => _index.Keys;
 
     public ISerializableObject? Load(LocalId id)
     {
@@ -39,7 +49,7 @@ public sealed class FileScopeLoader : ISerializationScopeLoader
     {
         // Re-scan from the start until the matching document is found, then deserialize in place.
         // O(n) per object; acceptable for the small scopes assets produce today.
-        var deserializer = new YamlDeserializer(new YamlParser(new ReadOnlySequence<byte>(_data)), resolver);
+        var deserializer = new YamlDeserializer(new YamlParser(new ReadOnlySequence<byte>(_data)), resolver, _typeResolver);
         while (deserializer.TryBeginObject(out var id, out _))
         {
             if (id == obj.Id)
@@ -79,7 +89,7 @@ public sealed class FileScopeLoader : ISerializationScopeLoader
 
     private void BuildIndex()
     {
-        var deserializer = new YamlDeserializer(new YamlParser(new ReadOnlySequence<byte>(_data)), null);
+        var deserializer = new YamlDeserializer(new YamlParser(new ReadOnlySequence<byte>(_data)), null, _typeResolver);
         var first = true;
         while (deserializer.TryBeginObject(out var id, out var type))
         {
