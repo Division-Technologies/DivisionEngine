@@ -1,4 +1,3 @@
-using DivisionEngine;
 using DivisionEngine.Authoring.Assets;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -26,15 +25,15 @@ public sealed class ScriptReloadTests
     // A user Component that derives from the engine's Component (so it inherits Scope/Id) and
     // serializes a single field. Implemented by hand so the test needs no source generator.
     private const string GreeterSource = """
-        using DivisionEngine;
-        namespace UserScripts;
-        public sealed class Greeter : Component, ISerializable
-        {
-            public int Value;
-            public void Serialize<T>(ref T s) where T : ISerializer, allows ref struct => s.I32(0, default, Value);
-            public void Deserialize<T>(ref T d) where T : IDeserializer, allows ref struct => Value = d.I32(0, default);
-        }
-        """;
+                                         using DivisionEngine;
+                                         namespace UserScripts;
+                                         public sealed class Greeter : Component, ISerializable
+                                         {
+                                             public int Value;
+                                             public void Serialize<T>(ref T s) where T : ISerializer, allows ref struct => s.I32(0, default, Value);
+                                             public void Deserialize<T>(ref T d) where T : IDeserializer, allows ref struct => Value = d.I32(0, default);
+                                         }
+                                         """;
 
     [Test]
     public void ReloadScripts_MigratesStateAndRebindsToNewAssembly()

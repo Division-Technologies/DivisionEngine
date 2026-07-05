@@ -1,5 +1,3 @@
-using DivisionEngine;
-
 namespace DivisionEngine.Authoring.Assets;
 
 /// <summary>
@@ -11,5 +9,8 @@ namespace DivisionEngine.Authoring.Assets;
 /// </summary>
 public sealed class ScriptReloadSystem(AssetDatabase database, ScriptHost host) : ISystem
 {
-    public void Execute(ref FrameContext ctx) => database.ReloadScriptsIfDirty(host);
+    public void Execute(ref FrameContext ctx)
+    {
+        database.ReloadScriptsIfDirty(host);
+    }
 }

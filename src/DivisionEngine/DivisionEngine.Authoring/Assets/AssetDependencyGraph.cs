@@ -1,5 +1,3 @@
-using DivisionEngine;
-
 namespace DivisionEngine.Authoring.Assets;
 
 /// <summary>
@@ -33,8 +31,10 @@ internal sealed class AssetDependencyGraph
     }
 
     /// <summary>The assets that directly depend on <paramref name="asset" />.</summary>
-    public IReadOnlyCollection<ScopeId> GetDependents(ScopeId asset) =>
-        _reverse.TryGetValue(asset, out var dependents) ? dependents : Array.Empty<ScopeId>();
+    public IReadOnlyCollection<ScopeId> GetDependents(ScopeId asset)
+    {
+        return _reverse.TryGetValue(asset, out var dependents) ? dependents : Array.Empty<ScopeId>();
+    }
 
     /// <summary>Removes an asset and all edges touching it (used when an asset is deleted).</summary>
     public void Remove(ScopeId asset)

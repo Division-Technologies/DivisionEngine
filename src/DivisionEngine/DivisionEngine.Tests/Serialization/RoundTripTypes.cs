@@ -20,29 +20,29 @@ public partial struct TestPoint
 public partial class RoundTripContainer
 {
     [Serialize] public bool BoolValue;
+    [Serialize] public byte[] Bytes = [];
     [Serialize] public byte ByteValue;
     [Serialize] public char CharValue;
-    [Serialize] public int IntValue;
-    [Serialize] public ulong ULongValue;
-    [Serialize] public float FloatValue;
-    [Serialize] public double DoubleValue;
-    [Serialize] public string StringValue = "";
-    [Serialize] public TestEnum EnumValue;
-    [Serialize] public Guid GuidValue;
     [Serialize] public DateTime DateTimeValue;
-    [Serialize] public TimeSpan TimeSpanValue;
     [Serialize] public decimal DecimalValue;
-    [Serialize] public Vector3 Vector3Value;
-    [Serialize] public Quaternion QuaternionValue;
-    [Serialize] public byte[] Bytes = [];
-    [Serialize] public int[]? IntArray;
-    [Serialize] public List<string>? StringList;
+    [Serialize] public double DoubleValue;
     [Serialize] public List<TestEnum>? EnumList;
+    [Serialize] public TestEnum EnumValue;
+    [Serialize] public float FloatValue;
+    [Serialize] public Guid GuidValue;
+    [Serialize] public int[]? IntArray;
+    [Serialize] public int IntValue;
     [Serialize] public Dictionary<string, int>? Map;
-    [Serialize] public HashSet<int>? Set;
     [Serialize] public int? NullableInt;
     [Serialize] public TestPoint Point;
     [Serialize] public List<TestPoint>? PointList;
+    [Serialize] public Quaternion QuaternionValue;
+    [Serialize] public HashSet<int>? Set;
+    [Serialize] public List<string>? StringList;
+    [Serialize] public string StringValue = "";
+    [Serialize] public TimeSpan TimeSpanValue;
+    [Serialize] public ulong ULongValue;
+    [Serialize] public Vector3 Vector3Value;
 }
 
 [CustomFormatter(typeof(Version))]

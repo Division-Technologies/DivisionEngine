@@ -3,5 +3,5 @@
 internal enum YamlSerializationModeKind
 {
     Mapping,
-    Sequence,
+    Sequence
 }

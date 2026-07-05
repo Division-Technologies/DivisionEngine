@@ -41,6 +41,11 @@ public sealed class SerializationScope : IDisposable
     /// </summary>
     internal IReadOnlyDictionary<LocalId, ISerializableObject> Objects => _objects;
 
+    public void Dispose()
+    {
+        _loader.Dispose();
+    }
+
     /// <summary>
     ///     Registers a new object in the scope, assigning it the next available <see cref="LocalId" />.
     ///     Used when authoring a new asset in memory (objects normally enter a scope lazily via the
@@ -53,11 +58,6 @@ public sealed class SerializationScope : IDisposable
         obj.Id = id;
         _objects[id] = obj;
         return id;
-    }
-
-    public void Dispose()
-    {
-        _loader.Dispose();
     }
 
     internal ISerializableObject? Resolve(LocalId id, out bool needReload)

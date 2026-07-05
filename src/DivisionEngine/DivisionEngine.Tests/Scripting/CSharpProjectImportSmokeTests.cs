@@ -1,4 +1,3 @@
-using DivisionEngine;
 using DivisionEngine.Authoring.Assets;
 
 namespace DivisionEngine.Tests.Scripting;
@@ -21,28 +20,28 @@ public sealed class CSharpProjectImportSmokeTests
 
         var engineDll = typeof(ISerializableObject).Assembly.Location;
         File.WriteAllText(Path.Combine(assets, "Scripts.csproj"), $"""
-            <Project Sdk="Microsoft.NET.Sdk">
-              <PropertyGroup>
-                <TargetFramework>net10.0</TargetFramework>
-                <Nullable>enable</Nullable>
-                <LangVersion>preview</LangVersion>
-                <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
-              </PropertyGroup>
-              <ItemGroup>
-                <Reference Include="DivisionEngine"><HintPath>{engineDll}</HintPath></Reference>
-              </ItemGroup>
-            </Project>
-            """);
+                                                                   <Project Sdk="Microsoft.NET.Sdk">
+                                                                     <PropertyGroup>
+                                                                       <TargetFramework>net10.0</TargetFramework>
+                                                                       <Nullable>enable</Nullable>
+                                                                       <LangVersion>preview</LangVersion>
+                                                                       <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
+                                                                     </PropertyGroup>
+                                                                     <ItemGroup>
+                                                                       <Reference Include="DivisionEngine"><HintPath>{engineDll}</HintPath></Reference>
+                                                                     </ItemGroup>
+                                                                   </Project>
+                                                                   """);
         File.WriteAllText(Path.Combine(assets, "Greeter.cs"), """
-            using DivisionEngine;
-            namespace UserScripts;
-            public sealed class Greeter : Component, ISerializable
-            {
-                public int Value;
-                public void Serialize<T>(ref T s) where T : ISerializer, allows ref struct => s.I32(0, default, Value);
-                public void Deserialize<T>(ref T d) where T : IDeserializer, allows ref struct => Value = d.I32(0, default);
-            }
-            """);
+                                                              using DivisionEngine;
+                                                              namespace UserScripts;
+                                                              public sealed class Greeter : Component, ISerializable
+                                                              {
+                                                                  public int Value;
+                                                                  public void Serialize<T>(ref T s) where T : ISerializer, allows ref struct => s.I32(0, default, Value);
+                                                                  public void Deserialize<T>(ref T d) where T : IDeserializer, allows ref struct => Value = d.I32(0, default);
+                                                              }
+                                                              """);
 
         try
         {

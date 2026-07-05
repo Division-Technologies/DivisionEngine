@@ -1,5 +1,3 @@
-using DivisionEngine;
-
 namespace DivisionEngine.Authoring.Assets;
 
 /// <summary>
@@ -12,12 +10,13 @@ public sealed partial class CompiledAssembly : ISerializableObject
 {
     [Serialize] public string AssemblyName = "";
 
-    /// <summary>Absolute path to the compiled DLL in the project's import cache (machine-local).</summary>
-    [Serialize] public string DllPath = "";
-    [Serialize] public bool Success;
-
     /// <summary>Formatted compiler diagnostics (errors and warnings).</summary>
     [Serialize] public List<string> Diagnostics = new();
+
+    /// <summary>Absolute path to the compiled DLL in the project's import cache (machine-local).</summary>
+    [Serialize] public string DllPath = "";
+
+    [Serialize] public bool Success;
 
     public SerializationScope Scope { get; set; } = null!;
     public LocalId Id { get; set; }

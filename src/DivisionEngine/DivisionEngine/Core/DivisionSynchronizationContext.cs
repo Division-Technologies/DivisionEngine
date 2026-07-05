@@ -32,9 +32,9 @@ internal sealed class DivisionSynchronizationContext : SynchronizationContext
     private class SendContext
     {
         private static readonly ConcurrentQueue<SendContext> _pool = new();
+        private readonly SemaphoreSlim _semaphore = new(0, 1);
         private SendOrPostCallback? _callback;
         private Exception? _exception;
-        private readonly SemaphoreSlim _semaphore = new(0, 1);
         private object? _state;
 
         public static SendContext Get(SendOrPostCallback callback, object state)

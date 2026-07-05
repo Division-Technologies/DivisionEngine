@@ -1,5 +1,4 @@
 using System.Buffers;
-using DivisionEngine;
 using VYaml.Emitter;
 using VYaml.Parser;
 
@@ -13,14 +12,13 @@ namespace DivisionEngine.Authoring.Assets;
 /// </summary>
 public sealed class AssetMeta
 {
+    public List<Guid> Dependencies = new();
     public Guid Guid;
 
     /// <summary>The importer that produced this asset, or null for a direct (serialization-native) asset.</summary>
     public IAssetImporter? Importer;
-    public long SourceHash;
+
     public int ImporterVersion;
-    public int MainLocalId;
-    public List<Guid> Dependencies = new();
 
     /// <summary>
     ///     Extra source files this import consumed (beyond the source asset itself), stored relative to
@@ -28,6 +26,9 @@ public sealed class AssetMeta
     ///     change to any of them invalidates the cache (e.g. the .cs files compiled by a .csproj).
     /// </summary>
     public List<string> InputFiles = new();
+
+    public int MainLocalId;
+    public long SourceHash;
 
     /// <summary>
     ///     Reads a <c>.meta</c> file: a header document followed by the importer serialized as a typed
@@ -105,11 +106,11 @@ public sealed class AssetMeta
 [AutoSerialization]
 internal partial class AssetMetaHeader
 {
+    [Serialize] public List<Guid> Dependencies = new();
     [Serialize] public Guid Guid;
     [Serialize] public bool HasImporter;
-    [Serialize] public long SourceHash;
     [Serialize] public int ImporterVersion;
-    [Serialize] public int MainLocalId;
-    [Serialize] public List<Guid> Dependencies = new();
     [Serialize] public List<string> InputFiles = new();
+    [Serialize] public int MainLocalId;
+    [Serialize] public long SourceHash;
 }

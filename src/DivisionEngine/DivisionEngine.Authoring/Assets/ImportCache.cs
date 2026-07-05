@@ -1,5 +1,4 @@
 using System.IO.Hashing;
-using DivisionEngine;
 
 namespace DivisionEngine.Authoring.Assets;
 
@@ -10,12 +9,21 @@ namespace DivisionEngine.Authoring.Assets;
 /// </summary>
 internal sealed class ImportCache(string directory)
 {
-    public string PathFor(ScopeId guid) => Path.Combine(directory, guid.ToString() + ".cache");
+    public string PathFor(ScopeId guid)
+    {
+        return Path.Combine(directory, guid + ".cache");
+    }
 
     /// <summary>Per-asset directory for build artifacts (e.g. a compiled DLL) keyed by GUID.</summary>
-    public string ArtifactDirectory(ScopeId guid) => Path.Combine(directory, guid.ToString() + ".artifacts");
+    public string ArtifactDirectory(ScopeId guid)
+    {
+        return Path.Combine(directory, guid + ".artifacts");
+    }
 
-    public bool Exists(ScopeId guid) => File.Exists(PathFor(guid));
+    public bool Exists(ScopeId guid)
+    {
+        return File.Exists(PathFor(guid));
+    }
 
     public void Write(ScopeId guid, byte[] data)
     {
@@ -24,7 +32,10 @@ internal sealed class ImportCache(string directory)
     }
 
     /// <summary>Content hash used to detect source-file changes.</summary>
-    public static long Hash(ReadOnlySpan<byte> data) => unchecked((long)XxHash64.HashToUInt64(data));
+    public static long Hash(ReadOnlySpan<byte> data)
+    {
+        return unchecked((long)XxHash64.HashToUInt64(data));
+    }
 
     /// <summary>
     ///     Combined content hash of a source file plus any extra input files, in a deterministic order.

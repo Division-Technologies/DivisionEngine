@@ -38,7 +38,8 @@ public static class FormatterRegistry
         if (!openGenericTarget.IsGenericTypeDefinition)
             throw new ArgumentException($"{openGenericTarget} is not an open generic type.", nameof(openGenericTarget));
         if (!openGenericFormatter.IsGenericTypeDefinition)
-            throw new ArgumentException($"{openGenericFormatter} is not an open generic type.", nameof(openGenericFormatter));
+            throw new ArgumentException($"{openGenericFormatter} is not an open generic type.",
+                nameof(openGenericFormatter));
 
         lock (Gate)
         {
@@ -77,14 +78,16 @@ public static class FormatterRegistry
             return (IValueFormatter<T>)Activator.CreateInstance(typeof(EnumFormatter<>).MakeGenericType(type))!;
 
         if (typeof(ISerializableObject).IsAssignableFrom(type) && type.IsClass)
-            return (IValueFormatter<T>)Activator.CreateInstance(typeof(ObjectReferenceFormatter<>).MakeGenericType(type))!;
+            return (IValueFormatter<T>)Activator.CreateInstance(
+                typeof(ObjectReferenceFormatter<>).MakeGenericType(type))!;
 
         if (type.IsArray && type.GetArrayRank() == 1 && type.GetElementType() is { } element)
             return (IValueFormatter<T>)Activator.CreateInstance(typeof(ArrayFormatter<>).MakeGenericType(element))!;
 
         if (type.IsConstructedGenericType &&
             OpenGenericFactories.TryGetValue(type.GetGenericTypeDefinition(), out var openFormatter))
-            return (IValueFormatter<T>)Activator.CreateInstance(openFormatter.MakeGenericType(type.GenericTypeArguments))!;
+            return (IValueFormatter<T>)Activator.CreateInstance(
+                openFormatter.MakeGenericType(type.GenericTypeArguments))!;
 
         return null;
     }

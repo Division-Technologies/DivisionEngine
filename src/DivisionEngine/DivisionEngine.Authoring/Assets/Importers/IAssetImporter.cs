@@ -1,5 +1,3 @@
-using DivisionEngine;
-
 namespace DivisionEngine.Authoring.Assets;
 
 /// <summary>

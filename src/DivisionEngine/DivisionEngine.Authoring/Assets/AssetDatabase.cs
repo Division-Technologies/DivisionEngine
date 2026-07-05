@@ -1,5 +1,4 @@
 using System.Buffers;
-using DivisionEngine;
 using VYaml.Emitter;
 
 namespace DivisionEngine.Authoring.Assets;
@@ -19,18 +18,23 @@ namespace DivisionEngine.Authoring.Assets;
 /// </summary>
 public sealed class AssetDatabase : IDisposable
 {
-    private readonly ImportCache _cache;
-    private readonly AssetDependencyGraph _dependencies = new();
-
     // Input source files (e.g. .cs) an asset consumed, and the reverse map file -> dependent assets.
     // A change to such a file re-imports its dependents (the .csproj asset).
     private readonly Dictionary<ScopeId, string[]> _assetInputs = new();
+    private readonly ImportCache _cache;
+    private readonly AssetDependencyGraph _dependencies = new();
     private readonly Dictionary<string, HashSet<ScopeId>> _fileDependents = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly Dictionary<ScopeId, string> _guidToPath = new();
     private readonly Dictionary<ScopeId, ISerializationScopeLoader> _loaders = new();
     private readonly Dictionary<ScopeId, LocalId> _mainIds = new();
     private readonly Dictionary<string, ScopeId> _pathToGuid = new();
+
+    // Pending file-system changes accumulated by the watcher. They are NOT acted on when the event
+    // fires; reimport happens only when Refresh() is called explicitly.
+    private readonly HashSet<string> _pendingChanged = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _pendingDeleted = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _pendingGate = new();
     private readonly List<string> _roots = new();
 
     // The YAML scope file a GUID loads from: the asset file itself for direct assets, or the import
@@ -38,20 +42,13 @@ public sealed class AssetDatabase : IDisposable
     private readonly Dictionary<ScopeId, string> _scopeFile = new();
     private readonly Dictionary<ScopeId, SerializationScope> _scopes = new();
 
-    // Pending file-system changes accumulated by the watcher. They are NOT acted on when the event
-    // fires; reimport happens only when Refresh() is called explicitly.
-    private readonly HashSet<string> _pendingChanged = new(StringComparer.OrdinalIgnoreCase);
-    private readonly HashSet<string> _pendingDeleted = new(StringComparer.OrdinalIgnoreCase);
-    private readonly object _pendingGate = new();
-
-    private AssetWatcher? _watcher;
+    // Compiled user assemblies (guid -> DLL path) and whether a script (re)load is pending.
+    private readonly Dictionary<ScopeId, string> _scriptDlls = new();
 
     // Set during script reload so every scope load resolves user types against the active user ALC.
     private ITypeResolver? _typeResolver;
 
-    // Compiled user assemblies (guid -> DLL path) and whether a script (re)load is pending.
-    private readonly Dictionary<ScopeId, string> _scriptDlls = new();
-    private bool _scriptsDirty;
+    private AssetWatcher? _watcher;
 
     /// <param name="cacheDirectory">Where imported asset caches are stored. Defaults to a temp folder.</param>
     public AssetDatabase(string? cacheDirectory = null)
@@ -71,6 +68,16 @@ public sealed class AssetDatabase : IDisposable
     /// <summary>Every asset GUID currently known to the database.</summary>
     public IReadOnlyCollection<ScopeId> AllAssets => _guidToPath.Keys;
 
+    /// <summary>
+    ///     Reloads user (script) assemblies, migrating all live object state across the swap. Serializes
+    ///     every materialized scope, drops the live instances (so the old assemblies can be unloaded),
+    ///     swaps the user assembly context, then re-creates and re-deserializes the objects against the
+    ///     new types. Cross-object references are re-resolved by GlobalId, so they survive the reload.
+    ///     <para>External holders of references must re-acquire from the database after a reload.</para>
+    /// </summary>
+    /// <summary>Whether a compiled user assembly changed since the last script (re)load.</summary>
+    public bool ScriptsDirty { get; private set; }
+
     public void Dispose()
     {
         StopWatching();
@@ -79,11 +86,16 @@ public sealed class AssetDatabase : IDisposable
     }
 
     /// <summary>Returns the GUID registered for an asset path, or null if unknown.</summary>
-    public ScopeId? GetGuid(string path) =>
-        _pathToGuid.TryGetValue(Normalize(path), out var guid) ? guid : null;
+    public ScopeId? GetGuid(string path)
+    {
+        return _pathToGuid.TryGetValue(Normalize(path), out var guid) ? guid : null;
+    }
 
     /// <summary>Returns the source file path registered for a GUID, or null if unknown.</summary>
-    public string? GetPath(ScopeId guid) => _guidToPath.GetValueOrDefault(guid);
+    public string? GetPath(ScopeId guid)
+    {
+        return _guidToPath.GetValueOrDefault(guid);
+    }
 
     /// <summary>Associates an asset GUID with a file path (both directions).</summary>
     public void Register(ScopeId guid, string path)
@@ -209,7 +221,10 @@ public sealed class AssetDatabase : IDisposable
     }
 
     /// <summary>Registers <paramref name="obj" /> in <paramref name="scope" /> and returns its assigned id.</summary>
-    public LocalId AddObject(SerializationScope scope, ISerializableObject obj) => scope.Add(obj);
+    public LocalId AddObject(SerializationScope scope, ISerializableObject obj)
+    {
+        return scope.Add(obj);
+    }
 
     /// <summary>
     ///     Serializes a direct (serialization-native) asset to <paramref name="path" />, writes its
@@ -241,8 +256,10 @@ public sealed class AssetDatabase : IDisposable
     }
 
     /// <summary>Loads an asset's main object by path.</summary>
-    public T? LoadAsset<T>(string path) where T : class, ISerializableObject =>
-        GetGuid(path) is { } guid ? LoadAsset<T>(guid) : null;
+    public T? LoadAsset<T>(string path) where T : class, ISerializableObject
+    {
+        return GetGuid(path) is { } guid ? LoadAsset<T>(guid) : null;
+    }
 
     /// <summary>
     ///     Imports a source asset file through its registered importer (or the importer recorded in its
@@ -260,23 +277,16 @@ public sealed class AssetDatabase : IDisposable
     ///     scopes are updated in place (existing object instances keep their identity) so that
     ///     references held by other assets remain valid after the re-import.
     /// </summary>
-    public void Reimport(string path) => Reimport(Normalize(path), new HashSet<ScopeId>());
-
-    /// <summary>
-    ///     Reloads user (script) assemblies, migrating all live object state across the swap. Serializes
-    ///     every materialized scope, drops the live instances (so the old assemblies can be unloaded),
-    ///     swaps the user assembly context, then re-creates and re-deserializes the objects against the
-    ///     new types. Cross-object references are re-resolved by GlobalId, so they survive the reload.
-    ///     <para>External holders of references must re-acquire from the database after a reload.</para>
-    /// </summary>
-    /// <summary>Whether a compiled user assembly changed since the last script (re)load.</summary>
-    public bool ScriptsDirty => _scriptsDirty;
+    public void Reimport(string path)
+    {
+        Reimport(Normalize(path), new HashSet<ScopeId>());
+    }
 
     /// <summary>Reloads user assemblies if any changed since the last reload; otherwise a no-op.</summary>
     public void ReloadScriptsIfDirty(ScriptHost host)
     {
-        if (!_scriptsDirty) return;
-        _scriptsDirty = false;
+        if (!ScriptsDirty) return;
+        ScriptsDirty = false;
         ReloadScripts(host, _scriptDlls.Values.ToArray());
     }
 
@@ -381,7 +391,7 @@ public sealed class AssetDatabase : IDisposable
         if (LoadAsset<CompiledAssembly>(guid) is not { Success: true } compiled || compiled.DllPath.Length == 0)
             return;
         _scriptDlls[guid] = compiled.DllPath;
-        _scriptsDirty = true;
+        ScriptsDirty = true;
     }
 
     /// <summary>Synchronizes one file found during <see cref="Refresh" />: import it, or register a direct asset.</summary>
@@ -459,7 +469,7 @@ public sealed class AssetDatabase : IDisposable
         _dependencies.Remove(guid);
         SetFileDependents(guid, []);
         _assetInputs.Remove(guid);
-        if (_scriptDlls.Remove(guid)) _scriptsDirty = true;
+        if (_scriptDlls.Remove(guid)) ScriptsDirty = true;
     }
 
     /// <summary>Replaces the file -> dependent-asset edges for <paramref name="guid" />.</summary>
@@ -579,7 +589,10 @@ public sealed class AssetDatabase : IDisposable
         return writer.WrittenSpan.ToArray();
     }
 
-    private static string Normalize(string path) => Path.GetFullPath(path);
+    private static string Normalize(string path)
+    {
+        return Path.GetFullPath(path);
+    }
 
     private readonly record struct ImportRun(SerializationScope Scope, ISerializableObject? Main, LocalId MainId);
 }

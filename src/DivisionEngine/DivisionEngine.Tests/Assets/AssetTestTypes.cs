@@ -1,5 +1,3 @@
-using DivisionEngine;
-
 namespace DivisionEngine.Tests.Assets;
 
 /// <summary>A minimal scope-managed object with a (possibly cross-scope) reference, for asset tests.</summary>

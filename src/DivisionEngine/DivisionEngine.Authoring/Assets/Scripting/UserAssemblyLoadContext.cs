@@ -12,5 +12,8 @@ namespace DivisionEngine.Authoring.Assets;
 /// </summary>
 public sealed class UserAssemblyLoadContext() : AssemblyLoadContext("DivisionUser", true)
 {
-    protected override Assembly? Load(AssemblyName assemblyName) => null;
+    protected override Assembly? Load(AssemblyName assemblyName)
+    {
+        return null;
+    }
 }

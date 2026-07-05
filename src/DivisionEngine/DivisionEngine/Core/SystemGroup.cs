@@ -10,5 +10,8 @@ public class SystemGroup : ISystem
     }
 
     /// <summary>Adds a child system, executed after the systems already in the group.</summary>
-    public void Add(ISystem system) => Systems.Add(system);
+    public void Add(ISystem system)
+    {
+        Systems.Add(system);
+    }
 }

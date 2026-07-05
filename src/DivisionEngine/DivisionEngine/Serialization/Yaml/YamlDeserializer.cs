@@ -115,7 +115,7 @@ internal ref struct YamlDeserializer(
 
     public ISerializableObject? ObjectReference(int id, ReadOnlySpan<byte> hintUtf8)
     {
-        if(resolver is null) throw  new InvalidOperationException();
+        if (resolver is null) throw new InvalidOperationException();
         if (!TryBeginStruct(id, hintUtf8)) return null;
 
         if (!TryRead(0, "scope"u8))

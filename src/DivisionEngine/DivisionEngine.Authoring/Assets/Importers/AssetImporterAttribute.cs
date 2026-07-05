@@ -5,7 +5,7 @@ namespace DivisionEngine.Authoring.Assets;
 ///     extensions. Discovered by <see cref="AssetImporterRegistry" /> via assembly scanning.
 ///     Extensions may be written with or without a leading dot (e.g. "png" or ".png").
 /// </summary>
-[AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct, AllowMultiple = false)]
+[AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct)]
 public sealed class AssetImporterAttribute(params string[] extensions) : Attribute
 {
     public string[] Extensions { get; } = extensions;

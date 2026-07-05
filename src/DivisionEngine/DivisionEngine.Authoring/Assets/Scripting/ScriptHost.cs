@@ -1,5 +1,4 @@
 using System.Reflection;
-using DivisionEngine;
 
 namespace DivisionEngine.Authoring.Assets;
 
@@ -71,6 +70,10 @@ public sealed class ScriptHost
     private sealed class EmptyResolver : ITypeResolver
     {
         public static readonly EmptyResolver Instance = new();
-        public Type? Resolve(string fullName) => null;
+
+        public Type? Resolve(string fullName)
+        {
+            return null;
+        }
     }
 }

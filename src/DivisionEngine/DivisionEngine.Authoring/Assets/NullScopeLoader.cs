@@ -1,5 +1,3 @@
-using DivisionEngine;
-
 namespace DivisionEngine.Authoring.Assets;
 
 /// <summary>
@@ -11,7 +9,10 @@ internal sealed class NullScopeLoader : ISerializationScopeLoader
 {
     public static readonly NullScopeLoader Instance = new();
 
-    public ISerializableObject? Load(LocalId id) => null;
+    public ISerializableObject? Load(LocalId id)
+    {
+        return null;
+    }
 
     public void Deserialize(ISerializableObject obj, ISerializedObjectResolver resolver)
     {

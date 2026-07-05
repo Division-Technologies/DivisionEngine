@@ -2,7 +2,7 @@
 
 public struct FixedUpdateTimeProvider : ITimeProvider
 {
-    private double _fixedDeltaTime;
+    private readonly double _fixedDeltaTime;
     private Realtime? _initial;
     private int _frameCount;
     private double _accumulated;

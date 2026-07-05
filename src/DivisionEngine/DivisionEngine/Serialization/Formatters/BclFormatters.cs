@@ -7,10 +7,16 @@ internal readonly struct ByteArrayFormatter : IValueFormatter<byte[]>
 {
     // null round-trips as [] (Blob cannot express null)
     public void Serialize<TS>(ref TS s, int id, ReadOnlySpan<byte> hint, in byte[] value)
-        where TS : ISerializer, allows ref struct => s.Blob(id, hint, value ?? [], BlobKind.ByteArray);
+        where TS : ISerializer, allows ref struct
+    {
+        s.Blob(id, hint, value ?? [], BlobKind.ByteArray);
+    }
 
     public byte[] Deserialize<TD>(ref TD d, int id, ReadOnlySpan<byte> hint)
-        where TD : IDeserializer, allows ref struct => d.Blob(id, hint, out _);
+        where TD : IDeserializer, allows ref struct
+    {
+        return d.Blob(id, hint, out _);
+    }
 }
 
 [CustomFormatter(typeof(Guid))]
@@ -36,10 +42,16 @@ internal readonly struct GuidFormatter : IValueFormatter<Guid>
 internal readonly struct DateTimeFormatter : IValueFormatter<DateTime>
 {
     public void Serialize<TS>(ref TS s, int id, ReadOnlySpan<byte> hint, in DateTime value)
-        where TS : ISerializer, allows ref struct => s.I64(id, hint, value.ToBinary());
+        where TS : ISerializer, allows ref struct
+    {
+        s.I64(id, hint, value.ToBinary());
+    }
 
     public DateTime Deserialize<TD>(ref TD d, int id, ReadOnlySpan<byte> hint)
-        where TD : IDeserializer, allows ref struct => DateTime.FromBinary(d.I64(id, hint));
+        where TD : IDeserializer, allows ref struct
+    {
+        return DateTime.FromBinary(d.I64(id, hint));
+    }
 }
 
 [CustomFormatter(typeof(DateTimeOffset))]
@@ -69,10 +81,16 @@ internal readonly struct DateTimeOffsetFormatter : IValueFormatter<DateTimeOffse
 internal readonly struct TimeSpanFormatter : IValueFormatter<TimeSpan>
 {
     public void Serialize<TS>(ref TS s, int id, ReadOnlySpan<byte> hint, in TimeSpan value)
-        where TS : ISerializer, allows ref struct => s.I64(id, hint, value.Ticks);
+        where TS : ISerializer, allows ref struct
+    {
+        s.I64(id, hint, value.Ticks);
+    }
 
     public TimeSpan Deserialize<TD>(ref TD d, int id, ReadOnlySpan<byte> hint)
-        where TD : IDeserializer, allows ref struct => new(d.I64(id, hint));
+        where TD : IDeserializer, allows ref struct
+    {
+        return new TimeSpan(d.I64(id, hint));
+    }
 }
 
 [CustomFormatter(typeof(decimal))]

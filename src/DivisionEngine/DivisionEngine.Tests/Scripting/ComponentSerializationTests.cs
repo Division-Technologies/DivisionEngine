@@ -1,5 +1,4 @@
 using System.Buffers;
-using DivisionEngine;
 using DivisionEngine.Authoring.Assets;
 using VYaml.Emitter;
 using VYaml.Parser;
@@ -17,7 +16,10 @@ public sealed class ComponentSerializationTests
 {
     private sealed class NullResolver : ISerializedObjectResolver
     {
-        public ISerializableObject? Resolve(GlobalId id) => null;
+        public ISerializableObject? Resolve(GlobalId id)
+        {
+            return null;
+        }
     }
 
     [Test]

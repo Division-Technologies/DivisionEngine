@@ -22,7 +22,7 @@ internal sealed class ObjectManager
         var resolver = new Resolver(newManager, false);
 
         foreach (var (scopeId, scope) in Scopes) newManager.Scopes[scopeId].Transfer(scope, resolver);
-        
+
 
         return newManager;
     }

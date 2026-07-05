@@ -1,5 +1,3 @@
-using DivisionEngine;
-
 namespace DivisionEngine.Authoring.Assets;
 
 /// <summary>
@@ -9,9 +7,9 @@ namespace DivisionEngine.Authoring.Assets;
 /// </summary>
 public sealed class AssetImportContext
 {
+    private readonly string _artifactDirectory;
     private readonly List<ScopeId> _dependencies = new();
     private readonly List<string> _inputFiles = new();
-    private readonly string _artifactDirectory;
     private readonly SerializationScope _scope;
 
     internal AssetImportContext(string sourcePath, SerializationScope scope, string artifactDirectory)
@@ -34,13 +32,22 @@ public sealed class AssetImportContext
     public IReadOnlyList<string> InputFiles => _inputFiles;
 
     /// <summary>Opens the source file for reading.</summary>
-    public Stream OpenSource() => File.OpenRead(SourcePath);
+    public Stream OpenSource()
+    {
+        return File.OpenRead(SourcePath);
+    }
 
     /// <summary>Reads the entire source file.</summary>
-    public byte[] ReadAllBytes() => File.ReadAllBytes(SourcePath);
+    public byte[] ReadAllBytes()
+    {
+        return File.ReadAllBytes(SourcePath);
+    }
 
     /// <summary>Adds a produced object to the asset, returning its assigned id.</summary>
-    public LocalId AddObject(ISerializableObject obj) => _scope.Add(obj);
+    public LocalId AddObject(ISerializableObject obj)
+    {
+        return _scope.Add(obj);
+    }
 
     /// <summary>Declares the asset's main object, adding it first if it has not been added yet.</summary>
     public void SetMainObject(ISerializableObject obj)
@@ -50,13 +57,22 @@ public sealed class AssetImportContext
     }
 
     /// <summary>Records a dependency on another asset by GUID.</summary>
-    public void DependsOnAsset(ScopeId guid) => _dependencies.Add(guid);
+    public void DependsOnAsset(ScopeId guid)
+    {
+        _dependencies.Add(guid);
+    }
 
     /// <summary>Records a dependency on a source file (not itself an asset), e.g. a compiled .cs file.</summary>
-    public void DependsOnFile(string path) => _inputFiles.Add(Path.GetFullPath(path));
+    public void DependsOnFile(string path)
+    {
+        _inputFiles.Add(Path.GetFullPath(path));
+    }
 
     /// <summary>Full path of a named build artifact (e.g. a compiled DLL) in this asset's artifact dir.</summary>
-    public string ArtifactPath(string name) => Path.Combine(_artifactDirectory, name);
+    public string ArtifactPath(string name)
+    {
+        return Path.Combine(_artifactDirectory, name);
+    }
 
     /// <summary>Writes a named build artifact to this asset's artifact directory and returns its path.</summary>
     public string WriteArtifact(string name, byte[] data)

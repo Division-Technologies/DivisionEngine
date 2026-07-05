@@ -12,7 +12,10 @@ public sealed class Engine(ILogger logger)
     ///     Adds a system to the root system group so it executes once per frame. The authoring
     ///     environment uses this to register the asset-refresh system, for example.
     /// </summary>
-    public void AddSystem(ISystem system) => _rootSystemGroup.Add(system);
+    public void AddSystem(ISystem system)
+    {
+        _rootSystemGroup.Add(system);
+    }
 
     public void Main()
     {

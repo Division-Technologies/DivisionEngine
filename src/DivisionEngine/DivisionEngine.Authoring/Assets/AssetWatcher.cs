@@ -57,5 +57,8 @@ public sealed class AssetWatcher : IDisposable
         if (!IsMeta(e.FullPath)) _onChanged(e.FullPath);
     }
 
-    private static bool IsMeta(string path) => path.EndsWith(".meta", StringComparison.OrdinalIgnoreCase);
+    private static bool IsMeta(string path)
+    {
+        return path.EndsWith(".meta", StringComparison.OrdinalIgnoreCase);
+    }
 }

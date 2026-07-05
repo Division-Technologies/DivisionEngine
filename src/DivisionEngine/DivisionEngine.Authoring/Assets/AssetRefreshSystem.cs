@@ -1,5 +1,3 @@
-using DivisionEngine;
-
 namespace DivisionEngine.Authoring.Assets;
 
 /// <summary>
@@ -10,5 +8,8 @@ namespace DivisionEngine.Authoring.Assets;
 /// </summary>
 public sealed class AssetRefreshSystem(AssetDatabase database) : ISystem
 {
-    public void Execute(ref FrameContext ctx) => database.Refresh();
+    public void Execute(ref FrameContext ctx)
+    {
+        database.Refresh();
+    }
 }

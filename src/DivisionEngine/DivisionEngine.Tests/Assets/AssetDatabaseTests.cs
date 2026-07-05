@@ -1,4 +1,3 @@
-using DivisionEngine;
 using DivisionEngine.Authoring.Assets;
 
 namespace DivisionEngine.Tests.Assets;
@@ -258,11 +257,19 @@ public sealed class AssetDatabaseTests
         File.WriteAllText(Path.Combine(assets, "p.dntxt"), "persisted");
 
         TextNodeImporter.ImportCount = 0;
-        using (var db = new AssetDatabase(new[] { assets }, library)) db.Refresh();
+        using (var db = new AssetDatabase(new[] { assets }, library))
+        {
+            db.Refresh();
+        }
+
         Assert.That(TextNodeImporter.ImportCount, Is.EqualTo(1));
 
         // A new database over the same project (same cache + .meta) must not re-import.
-        using (var db = new AssetDatabase(new[] { assets }, library)) db.Refresh();
+        using (var db = new AssetDatabase(new[] { assets }, library))
+        {
+            db.Refresh();
+        }
+
         Assert.That(TextNodeImporter.ImportCount, Is.EqualTo(1), "persisted cache should be reused");
     }
 

@@ -1,5 +1,4 @@
 using System.Buffers;
-using DivisionEngine;
 using VYaml.Parser;
 
 namespace DivisionEngine.Authoring.Assets;
@@ -49,7 +48,8 @@ public sealed class FileScopeLoader : ISerializationScopeLoader
     {
         // Re-scan from the start until the matching document is found, then deserialize in place.
         // O(n) per object; acceptable for the small scopes assets produce today.
-        var deserializer = new YamlDeserializer(new YamlParser(new ReadOnlySequence<byte>(_data)), resolver, _typeResolver);
+        var deserializer =
+            new YamlDeserializer(new YamlParser(new ReadOnlySequence<byte>(_data)), resolver, _typeResolver);
         while (deserializer.TryBeginObject(out var id, out _))
         {
             if (id == obj.Id)

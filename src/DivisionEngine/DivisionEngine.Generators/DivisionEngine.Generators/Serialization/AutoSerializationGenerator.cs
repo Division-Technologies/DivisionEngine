@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -189,7 +190,7 @@ public class AutoSerializationGenerator : IIncrementalGenerator
                     .Concat(structs)
                     .Where(static n => n.Length > 0)
                     .Distinct()
-                    .OrderBy(static n => n, System.StringComparer.Ordinal)
+                    .OrderBy(static n => n, StringComparer.Ordinal)
                     .ToImmutableArray();
                 return new EquatableArray<string>(merged);
             });

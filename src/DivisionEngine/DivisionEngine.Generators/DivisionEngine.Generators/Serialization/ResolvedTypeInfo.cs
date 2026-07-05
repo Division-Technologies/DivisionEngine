@@ -24,8 +24,8 @@ public enum ResolvedTypeKind
 }
 
 /// <summary>
-/// Pre-resolved type information extracted from <see cref="ITypeSymbol"/>.
-/// This is a pure data record with value equality, safe to cache in incremental generator pipelines.
+///     Pre-resolved type information extracted from <see cref="ITypeSymbol" />.
+///     This is a pure data record with value equality, safe to cache in incremental generator pipelines.
 /// </summary>
 public sealed record ResolvedTypeInfo(
     ResolvedTypeKind Kind,
@@ -51,11 +51,11 @@ public sealed record ResolvedTypeInfo(
         }
 
         return new ResolvedTypeInfo(
-            Kind: kind,
-            DisplayName: symbol.ToDisplayString(),
-            StoreTypeRef: symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
-            EnumUnderlyingKind: enumUnderlying,
-            RequiredFormatters: new EquatableArray<string>(required));
+            kind,
+            symbol.ToDisplayString(),
+            symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
+            enumUnderlying,
+            new EquatableArray<string>(required));
     }
 
     private static ResolvedTypeKind ResolveKind(ITypeSymbol symbol, out ResolvedTypeKind enumUnderlying)
