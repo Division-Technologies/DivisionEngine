@@ -1,7 +1,9 @@
+#include <cstddef>
 #include <cstdint>
 #include <iterator>
 #include <string_view>
 #include <vector>
+#include <array>
 #define UNICODE
 #define _UNICODE
 
@@ -30,6 +32,12 @@ LRESULT WindowProcedure(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
     return DefWindowProcW(hwnd, message, wparam, lparam);
 }
 
+void EnableDebugLayer() {
+    ComPtr<ID3D12Debug> debug_controller;
+    if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug_controller)))) {
+        debug_controller->EnableDebugLayer();
+    }
+}
 
 int main() {
     try {
@@ -157,6 +165,49 @@ int main() {
         if (SUCCEEDED(result)) {
             tmp_swapchain.As(&swapchain);
         }
+
+        D3D12_DESCRIPTOR_HEAP_DESC heap_desc{};
+        heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+        heap_desc.NodeMask = 0;
+        heap_desc.NumDescriptors = 2;   // 裏表
+        heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+
+        ComPtr<ID3D12DescriptorHeap> rtv_heap;
+        device->CreateDescriptorHeap(&heap_desc, IID_PPV_ARGS(&rtv_heap));
+
+        // レンダーターゲットビュー(RTV)の作成.
+        std::vector<ComPtr<ID3D12Resource>> back_buffers(2);
+        for (int i = 0; i < 2; ++i) {
+            swapchain->GetBuffer(i, IID_PPV_ARGS(&back_buffers[i]));
+
+            D3D12_CPU_DESCRIPTOR_HANDLE rtv_handle{
+                rtv_heap->GetCPUDescriptorHandleForHeapStart()
+            };
+            rtv_handle.ptr += static_cast<SIZE_T>(i) * device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+
+            device->CreateRenderTargetView(back_buffers[i].Get(), nullptr, rtv_handle);
+        }
+
+        // メインループ
+        command_allocator->Reset();
+        const auto bb_idx = swapchain->GetCurrentBackBufferIndex();
+        auto rtv_handle = rtv_heap->GetCPUDescriptorHandleForHeapStart();
+        rtv_handle.ptr += static_cast<SIZE_T>(bb_idx) * device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+        command_list->OMSetRenderTargets(1, &rtv_handle, true, nullptr);
+
+        const std::array<float, 4> clear_color{1.0f, 1.0f, 1.0f, 1.0f};
+        command_list->ClearRenderTargetView(rtv_handle, clear_color.data(), 0, nullptr);
+
+        command_list->Close();
+        const std::array<ID3D12CommandList*, 1> command_lists{command_list.Get()};
+        command_queue->ExecuteCommandLists(
+            static_cast<UINT>(command_lists.size()), command_lists.data()
+        );
+
+        command_allocator->Reset();
+        command_list->Reset(command_allocator.Get(), nullptr);
+
+        swapchain->Present(1, 0);
 
         return 0;
     } catch (const std::exception& e) {
