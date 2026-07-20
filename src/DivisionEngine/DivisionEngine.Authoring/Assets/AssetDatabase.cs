@@ -53,7 +53,11 @@ public sealed class AssetDatabase : IDisposable
     /// <param name="cacheDirectory">Where imported asset caches are stored. Defaults to a temp folder.</param>
     public AssetDatabase(string? cacheDirectory = null)
     {
-        _cache = new ImportCache(cacheDirectory ?? Path.Combine(Path.GetTempPath(), "DivisionEngine", "Cache"));
+        // Resolve to an absolute path: artifact paths derived from it (e.g. the compiler's obj/bin
+        // dirs and the compiled DLL path) must be absolute, since MSBuild resolves relative paths
+        // against the project directory rather than the app's working directory.
+        _cache = new ImportCache(
+            Path.GetFullPath(cacheDirectory ?? Path.Combine(Path.GetTempPath(), "DivisionEngine", "Cache")));
     }
 
     /// <summary>Opens a project: the given asset root folders, with imports cached in the project cache dir.</summary>
@@ -337,11 +341,13 @@ public sealed class AssetDatabase : IDisposable
         if (!visited.Add(guid)) return;
 
         var run = RunImporter(path, importer, guid);
+        if (run is null) return; // import failed; already logged, skip this asset
 
         if (_scopes.TryGetValue(guid, out var scope) && _scopeFile.TryGetValue(guid, out var file))
             ReloadInPlace(guid, scope, file);
         else
-            RegisterImportedScope(guid, run);
+            RegisterImportedScope(guid, run.Value);
+        TrackScript(guid, run.Value.Main);
 
         foreach (var dependent in _dependencies.GetDependents(guid).ToArray())
             if (GetPath(dependent) is { } dependentPath)
@@ -372,24 +378,28 @@ public sealed class AssetDatabase : IDisposable
             _mainIds[guid] = new LocalId(meta.MainLocalId);
             _dependencies.SetDependencies(guid, meta.Dependencies.Select(g => new ScopeId(g)));
             SetFileDependents(guid, inputFiles);
-            if (importer is CSharpProjectImporter) TrackScriptAsset(guid);
+            // Cache hit has no produced main object in hand; load it only for the script importer.
+            if (importer is CSharpProjectImporter) TrackScript(guid, LoadAsset<CompiledAssembly>(guid));
             return guid;
         }
 
         var run = RunImporter(path, importer, guid);
+        if (run is null) return null; // import failed; already logged, skip this asset
         if (_scopes.TryGetValue(guid, out var scope) && _scopeFile.TryGetValue(guid, out var file))
             ReloadInPlace(guid, scope, file);
         else
-            RegisterImportedScope(guid, run);
-        if (importer is CSharpProjectImporter) TrackScriptAsset(guid);
+            RegisterImportedScope(guid, run.Value);
+        TrackScript(guid, run.Value.Main);
         return guid;
     }
 
-    /// <summary>Records the DLL of a compiled C# project and flags that a script reload is pending.</summary>
-    private void TrackScriptAsset(ScopeId guid)
+    /// <summary>
+    ///     If the produced main object is a successfully compiled assembly, records its DLL and flags
+    ///     that a script (re)load is pending. Called on both first import and re-import.
+    /// </summary>
+    private void TrackScript(ScopeId guid, ISerializableObject? main)
     {
-        if (LoadAsset<CompiledAssembly>(guid) is not { Success: true } compiled || compiled.DllPath.Length == 0)
-            return;
+        if (main is not CompiledAssembly { Success: true } compiled || compiled.DllPath.Length == 0) return;
         _scriptDlls[guid] = compiled.DllPath;
         ScriptsDirty = true;
     }
@@ -518,12 +528,24 @@ public sealed class AssetDatabase : IDisposable
     /// <summary>
     ///     Runs the importer, writes the import cache and the <c>.meta</c> sidecar, and records the
     ///     asset's dependency edges. Does not register the produced scope in <see cref="_scopes" />.
+    ///     Returns null (and logs) if the importer throws, so a single bad asset is skipped rather than
+    ///     failing the whole refresh.
     /// </summary>
-    private ImportRun RunImporter(string path, IAssetImporter importer, ScopeId guid)
+    private ImportRun? RunImporter(string path, IAssetImporter importer, ScopeId guid)
     {
+        Console.WriteLine($"[AssetDatabase] Importing {path} ");
         var scope = new SerializationScope(guid, NullScopeLoader.Instance);
         var context = new AssetImportContext(path, scope, _cache.ArtifactDirectory(guid));
-        importer.Import(context);
+        try
+        {
+            importer.Import(context);
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"[AssetDatabase] Import failed for '{path}', skipping: {exception}");
+            return null;
+        }
+
         var mainId = context.MainObject?.Id ?? new LocalId(0);
         var cacheFile = _cache.PathFor(guid);
         var inputFiles = context.InputFiles;

@@ -53,6 +53,13 @@ public sealed class CSharpProjectImportSmokeTests
             Assert.That(compiled!.Success, Is.True,
                 "compile failed:\n" + string.Join("\n", compiled.Diagnostics));
             Assert.That(File.Exists(compiled.DllPath), Is.True);
+
+            // bin/obj must not be created next to the .csproj in the Assets tree.
+            Assert.Multiple(() =>
+            {
+                Assert.That(Directory.Exists(Path.Combine(assets, "obj")), Is.False, "obj leaked into Assets");
+                Assert.That(Directory.Exists(Path.Combine(assets, "bin")), Is.False, "bin leaked into Assets");
+            });
         }
         finally
         {

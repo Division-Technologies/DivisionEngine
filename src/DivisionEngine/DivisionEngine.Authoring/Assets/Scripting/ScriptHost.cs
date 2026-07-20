@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Runtime.CompilerServices;
 
 namespace DivisionEngine.Authoring.Assets;
 
@@ -34,6 +35,10 @@ public sealed class ScriptHost
         _context = new UserAssemblyLoadContext();
         foreach (var path in dllPaths)
             _assemblies.Add(_context.LoadFromStream(new MemoryStream(File.ReadAllBytes(path))));
+
+        foreach (var asm in _assemblies)
+        foreach (var module in asm.GetModules())
+            RuntimeHelpers.RunModuleConstructor(module.ModuleHandle);
 
         TypeResolver = new UserTypeResolver(_assemblies.ToArray());
     }

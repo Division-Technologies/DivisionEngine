@@ -56,6 +56,41 @@ public sealed class BinaryImporterTests
     }
 
     [Test]
+    public void ImportAsset_ImporterThrows_SkipsWithoutRegistering()
+    {
+        var path = Path.Combine(_dir, "bad.dnthrow");
+        File.WriteAllText(path, "x");
+
+        using var db = new AssetDatabase(Path.Combine(_dir, "cache"));
+
+        Assert.That(db.ImportAsset<AssetNode>(path), Is.Null);
+        Assert.Multiple(() =>
+        {
+            // A failed import registers nothing and writes no .meta sidecar.
+            Assert.That(db.GetGuid(path), Is.Null);
+            Assert.That(File.Exists(path + ".meta"), Is.False);
+        });
+    }
+
+    [Test]
+    public void Refresh_SkipsThrowingImporter_ContinuesWithOthers()
+    {
+        var assets = Path.Combine(_dir, "Assets");
+        Directory.CreateDirectory(assets);
+        File.WriteAllText(Path.Combine(assets, "good.dntxt"), "ok");
+        File.WriteAllText(Path.Combine(assets, "bad.dnthrow"), "x");
+
+        using var db = new AssetDatabase([assets], Path.Combine(_dir, "Library"));
+
+        Assert.DoesNotThrow(() => db.Refresh());
+        Assert.Multiple(() =>
+        {
+            Assert.That(db.LoadAsset<AssetNode>(Path.Combine(assets, "good.dntxt"))?.Name, Is.EqualTo("ok"));
+            Assert.That(db.GetGuid(Path.Combine(assets, "bad.dnthrow")), Is.Null);
+        });
+    }
+
+    [Test]
     public void Refresh_ImportsUncoveredFileAsBinaryAsset()
     {
         var assets = Path.Combine(_dir, "Assets");

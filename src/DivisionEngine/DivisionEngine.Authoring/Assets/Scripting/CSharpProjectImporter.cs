@@ -32,11 +32,28 @@ public sealed class CSharpProjectImporter : IAssetImporter
     {
     }
 
+    private static string AbsoluteWithSeparator(string path)
+    {
+        path = Path.GetFullPath(path);
+        return path.EndsWith(Path.DirectorySeparatorChar) ? path : path + Path.DirectorySeparatorChar;
+    }
+
     private static async Task<CompiledAssembly> CompileAsync(AssetImportContext context)
     {
         var compiled = new CompiledAssembly();
 
-        using var workspace = MSBuildWorkspace.Create();
+        // Redirect MSBuild's intermediate (obj) and output (bin) directories out of the Assets tree
+        // into this asset's artifact directory, so importing a .csproj does not create bin/obj beside
+        // it. Passed as global properties, they take effect before the SDK props evaluate.
+        // These MUST be absolute: MSBuild resolves relative paths against the project directory, not
+        // the app's working directory, so a relative artifact path would point at the wrong place.
+        var properties = new Dictionary<string, string>
+        {
+            ["BaseIntermediateOutputPath"] = AbsoluteWithSeparator(context.ArtifactPath("obj")),
+            ["BaseOutputPath"] = AbsoluteWithSeparator(context.ArtifactPath("bin"))
+        };
+
+        using var workspace = MSBuildWorkspace.Create(properties);
         var project = await workspace.OpenProjectAsync(context.SourcePath).ConfigureAwait(false);
 
         // Record every source file as an input dependency so edits re-trigger import.
