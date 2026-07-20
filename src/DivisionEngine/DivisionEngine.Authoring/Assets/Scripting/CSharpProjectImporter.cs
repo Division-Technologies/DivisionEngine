@@ -50,7 +50,8 @@ public sealed class CSharpProjectImporter : IAssetImporter
         var properties = new Dictionary<string, string>
         {
             ["BaseIntermediateOutputPath"] = AbsoluteWithSeparator(context.ArtifactPath("obj")),
-            ["BaseOutputPath"] = AbsoluteWithSeparator(context.ArtifactPath("bin"))
+            ["BaseOutputPath"] = AbsoluteWithSeparator(context.ArtifactPath("bin")),
+            ["EnableDefaultItems"] = "false"
         };
 
         using var workspace = MSBuildWorkspace.Create(properties);
