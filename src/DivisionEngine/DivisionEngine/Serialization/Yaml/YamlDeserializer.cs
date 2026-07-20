@@ -11,7 +11,6 @@ internal ref struct YamlDeserializer(
     ITypeResolver? typeResolver = null) : IContainerDeserializer
 {
     private YamlParser _parser = parser;
-    private readonly ITypeResolver? _typeResolver = typeResolver;
     private Stack<YamlSerializationModeKind>? _modes;
 
     private bool TryReadNextId(out int id)
@@ -235,7 +234,7 @@ internal ref struct YamlDeserializer(
 
         id = new LocalId(I32(0, "id"u8));
         type = TryRead(1, "type"u8)
-            ? ResolveType(_parser.ReadScalarAsString() ?? throw new InvalidOperationException(), _typeResolver)
+            ? ResolveType(_parser.ReadScalarAsString() ?? throw new InvalidOperationException(), typeResolver)
             : null;
         if (type == null || !TryBeginStruct(2, "value"u8))
         {

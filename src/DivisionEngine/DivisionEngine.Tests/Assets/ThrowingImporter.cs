@@ -1,4 +1,3 @@
-using DivisionEngine;
 using DivisionEngine.Authoring.Assets;
 
 namespace DivisionEngine.Tests.Assets;
@@ -7,7 +6,10 @@ namespace DivisionEngine.Tests.Assets;
 [AssetImporter(".dnthrow")]
 public sealed class ThrowingImporter : IAssetImporter
 {
-    public void Import(AssetImportContext context) => throw new InvalidOperationException("intentional import failure");
+    public void Import(AssetImportContext context)
+    {
+        throw new InvalidOperationException("intentional import failure");
+    }
 
     public void Serialize<T>(ref T serializer) where T : ISerializer, allows ref struct
     {

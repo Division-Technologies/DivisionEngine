@@ -1,4 +1,3 @@
-using DivisionEngine;
 using DivisionEngine.Authoring.Assets;
 
 namespace DivisionEngine.Tests.Scripting;
@@ -12,8 +11,10 @@ public sealed class FakeScriptImporter : IAssetImporter
 {
     public static string DllPath = "";
 
-    public void Import(AssetImportContext context) =>
+    public void Import(AssetImportContext context)
+    {
         context.SetMainObject(new CompiledAssembly { Success = true, AssemblyName = "Fake", DllPath = DllPath });
+    }
 
     public void Serialize<T>(ref T serializer) where T : ISerializer, allows ref struct
     {
