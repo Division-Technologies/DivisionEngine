@@ -6,7 +6,12 @@ The goal of this project is **not** to build a production-ready engine, but to *
 
 - Commits that merely "get things done" without demonstrating understanding will not be accepted.
 - Every feature implementation must be accompanied by documentation summarizing the research and findings behind it.
-- Research documents are maintained in a separate repository: https://github.com/Division-Technologies/DivisionNotes
+- Research documents live in the [`Notes/`](Notes/) directory of this monorepo.
+
+## Repository Structure
+This project is a monorepo:
+- [`src/`](src/) — engine source code (`Engine/`: C# layer, `Native/`: C++ layer)
+- [`Notes/`](Notes/) — research and documentation (mirrors the `src/` layout)
 
 
 ## Architecture
@@ -101,7 +106,12 @@ block-beta
 
 - 完成を優先するだけのコミットは受け入れません
 - 機能を実装する際は、必ず調査結果をドキュメントにまとめる必要があります
-- 調査ドキュメントは別リポジトリで管理しています：https://github.com/Division-Technologies/DivisionNotes
+- 調査ドキュメントはこのモノレポの [`Notes/`](Notes/) ディレクトリで管理しています
+
+### リポジトリ構成
+本リポジトリはモノレポです：
+- [`src/`](src/) — エンジンのソースコード(`Engine/`: C#レイヤー、`Native/`: C++レイヤー)
+- [`Notes/`](Notes/) — 調査・ドキュメント(`src/` の構成に対応)
 
 ### 設計方針
 - グラフィック抽象化：グラフィックAPIはHAL（ハードウェア抽象化レイヤー）を介してアクセスし、DirectX 12 と Vulkan の両方をサポートします。

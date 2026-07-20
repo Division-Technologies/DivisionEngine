@@ -1,0 +1,18 @@
+{
+    "cmake.sourceDirectory": "${workspaceFolder}/src/Native",
+    "cmake.useCMakePresets": "always",
+    "cmake.options.statusBarVisibility": "compact",
+    "editor.formatOnSave": true,
+    "editor.formatOnPaste": true,
+    "editor.formatOnSaveMode": "file",
+    "files.autoSave": "off",
+    "[cpp]": {
+        "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
+    },
+    "clangd.arguments": [
+        "--log=verbose"
+    ],
+    "C_Cpp.intelliSenseEngine": "disabled",
+    "C_Cpp.autocomplete": "disabled",
+    "C_Cpp.errorSquiggles": "disabled"
+}
