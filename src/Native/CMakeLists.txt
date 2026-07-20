@@ -34,6 +34,14 @@ set_target_properties(core PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(main PRIVATE core)
 
 
+# Platform-specific graphics backend libraries.
+# Windows: Direct3D 12 / DXGI. Linked here instead of via #pragma comment(lib)
+# in source so that non-Windows builds (macOS/Linux) stay clean.
+if(WIN32)
+    target_link_libraries(main PRIVATE d3d12 dxgi)
+endif()
+
+
 # ----- Enable clang-tidy if available -----.
 find_program(CLANG_TIDY_EXE NAMES "clang-tidy")
 if(CLANG_TIDY_EXE)
