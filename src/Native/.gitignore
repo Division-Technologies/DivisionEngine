@@ -17,9 +17,9 @@ CMakeUserPresets.json
 # clangd cache
 .cache/
 
-# VS Code local workspace files
-.vscode/*
-!.vscode/settings.json
+# VS Code config is kept only at the repository root.
+# Ignore any nested .vscode created by opening src/Native directly.
+.vscode/
 
 # Build outputs
 *.exe

@@ -14,8 +14,7 @@ winget install Cppcheck.Cppcheck
 
 winget install Microsoft.VisualStudio.BuildTools --override "--wait --passive --config ./buildtools.vsconfig"
 
-Add-WindowsCapability -Online -Name Tools.Graphics.DirectX # install Graphics Tools for Debugging
-winget install Microsoft.Sysinternals.DebugView
+Add-WindowsCapability -Online -Name Tools.Graphics.DirectX # D3D12デバッグレイヤー(Windowsオプション機能。VS不要)
 ```
 
 Windows環境変数の`Path`にLLVMのパスを追加する：`C:\Program Files\LLVM\bin\`
@@ -28,4 +27,4 @@ Windows環境変数の`Path`にLLVMのパスを追加する：`C:\Program Files\
 - [CMake Tools (Microsoft)](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cmake-tools)
 - [C++ Tools (Microsoft)](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpptools)
 
-src/Native/.vscode/extensions.jsonに必要な拡張機能が記載されているので、起動時にインストールを促されるはずです。
+リポジトリルートの`.vscode/extensions.json`に必要な拡張機能が記載されているので、DivisionEngineフォルダを開くとインストールを促されるはずです。

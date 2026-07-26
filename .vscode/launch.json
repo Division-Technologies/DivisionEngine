@@ -1,0 +1,16 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug main (clang-debug)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/Native/build/clang-debug/main.exe",
+      "args": [],
+      "cwd": "${workspaceFolder}/src/Native/build/clang-debug",
+      "stopAtEntry": false,
+      "console": "integratedTerminal",
+      "preLaunchTask": "CMake: Build (clang-debug)"
+    }
+  ]
+}
