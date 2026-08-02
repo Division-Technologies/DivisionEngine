@@ -9,7 +9,7 @@
       "args": [],
       "cwd": "${workspaceFolder}/src/Native/build/clang-debug",
       "stopAtEntry": false,
-      "console": "integratedTerminal",
+      "console": "internalConsole",
       "preLaunchTask": "CMake: Build (clang-debug)"
     }
   ]

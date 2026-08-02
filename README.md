@@ -13,6 +13,10 @@ This project is a monorepo:
 - [`src/`](src/) — engine source code (`Engine/`: C# layer, `Native/`: C++ layer)
 - [`Notes/`](Notes/) — research and documentation (mirrors the `src/` layout)
 
+## Tech Stack
+- `Native/` (C++): C++23
+- `Engine/` (C#): .NET 10.0 (C# 14)
+
 
 ## Architecture
 ### Design Principles
@@ -112,6 +116,10 @@ block-beta
 本リポジトリはモノレポです：
 - [`src/`](src/) — エンジンのソースコード(`Engine/`: C#レイヤー、`Native/`: C++レイヤー)
 - [`Notes/`](Notes/) — 調査・ドキュメント(`src/` の構成に対応)
+
+### 技術スタック
+- `Native/`（C++）：C++23
+- `Engine/`（C#）：.NET 10.0（C# 14）
 
 ### 設計方針
 - グラフィック抽象化：グラフィックAPIはHAL（ハードウェア抽象化レイヤー）を介してアクセスし、DirectX 12 と Vulkan の両方をサポートします。

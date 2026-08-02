@@ -6,22 +6,25 @@
   "tasks": [
     {
       "label": "CMake: Configure (clang-debug)",
-      "type": "shell",
-      "command": "cmake --preset clang-debug",
+      "type": "process",
+      "command": "cmake",
+      "args": ["--preset", "clang-debug"],
       "problemMatcher": [],
       "detail": "cmake --preset clang-debug"
     },
     {
       "label": "CMake: Configure (clang-release)",
-      "type": "shell",
-      "command": "cmake --preset clang-release",
+      "type": "process",
+      "command": "cmake",
+      "args": ["--preset", "clang-release"],
       "problemMatcher": [],
       "detail": "cmake --preset clang-release"
     },
     {
       "label": "CMake: Build (clang-debug)",
-      "type": "shell",
-      "command": "cmake --build --preset clang-debug",
+      "type": "process",
+      "command": "cmake",
+      "args": ["--build", "--preset", "clang-debug"],
       "group": {
         "kind": "build",
         "isDefault": true
@@ -31,8 +34,9 @@
     },
     {
       "label": "CMake: Build (clang-release)",
-      "type": "shell",
-      "command": "cmake --build --preset clang-release",
+      "type": "process",
+      "command": "cmake",
+      "args": ["--build", "--preset", "clang-release"],
       "group": "build",
       "problemMatcher": "$gcc",
       "detail": "cmake --build --preset clang-release"
