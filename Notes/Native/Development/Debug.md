@@ -44,7 +44,8 @@ GCC/LLDB系ではこれに相当する形式がDWARFであり、PDBのような�
 
 
 ## D3D12デバッグレイヤー
-> 現状、`main.cpp`の`EnableDebugLayer()`はコメントアウトされており未使用。DXGI側の`DXGI_CREATE_FACTORY_DEBUG`(`_DEBUG`ガード)のみ有効化している。有効化・検証は今後の課題。
+> 現状、`main.cpp`には`EnableDebugLayer()`が定義されているが、`main()`から呼ばれていない。
+> `CreateDXGIFactory2`もフラグ`0`で呼んでおり、`DXGI_CREATE_FACTORY_DEBUG`は未使用。
 
 D3D12デバッグレイヤーは、APIの誤用(リソースステートの不整合、バリア漏れなど)を実行時に検出してデバッグ出力へ警告を出す機能。
 
