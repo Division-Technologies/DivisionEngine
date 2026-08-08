@@ -20,7 +20,7 @@ public static class FormatterStore<T>
 
 public static class FormatterRegistry
 {
-    private static readonly object Gate = new();
+    private static readonly Lock Gate = new();
     private static readonly Dictionary<Type, Type> OpenGenericFactories = new();
     private static readonly HashSet<Assembly> ScannedAssemblies = new();
 

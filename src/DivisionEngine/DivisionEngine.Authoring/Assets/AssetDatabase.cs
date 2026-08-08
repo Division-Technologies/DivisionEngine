@@ -34,7 +34,7 @@ public sealed class AssetDatabase : IDisposable
     // fires; reimport happens only when Refresh() is called explicitly.
     private readonly HashSet<string> _pendingChanged = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _pendingDeleted = new(StringComparer.OrdinalIgnoreCase);
-    private readonly object _pendingGate = new();
+    private readonly Lock _pendingGate = new();
     private readonly List<string> _roots = new();
 
     // The YAML scope file a GUID loads from: the asset file itself for direct assets, or the import

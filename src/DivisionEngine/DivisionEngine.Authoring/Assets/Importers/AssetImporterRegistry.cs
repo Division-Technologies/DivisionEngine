@@ -11,7 +11,7 @@ namespace DivisionEngine.Authoring.Assets;
 public static class AssetImporterRegistry
 {
     private static readonly Dictionary<string, Type> ByExtension = new(StringComparer.OrdinalIgnoreCase);
-    private static readonly object Gate = new();
+    private static readonly Lock Gate = new();
     private static bool _scanned;
 
     /// <summary>Registers <paramref name="importerType" /> as the importer for <paramref name="extension" />.</summary>

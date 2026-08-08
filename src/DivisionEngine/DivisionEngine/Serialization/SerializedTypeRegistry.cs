@@ -15,7 +15,7 @@ namespace DivisionEngine;
 /// </summary>
 internal static class SerializedTypeRegistry
 {
-    private static readonly object Gate = new();
+    private static readonly Lock Gate = new();
     private static readonly Dictionary<string, Type> Map = new();
     private static readonly HashSet<Assembly> Scanned = new();
 
