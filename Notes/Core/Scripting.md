@@ -2,11 +2,13 @@
 
 ユーザーコードは C# で記述する。オーサリング環境では C# コードの変更・コンパイル・リロードを実行中に行える。実装は `DivisionEngine.Authoring` の `Assets/Scripting`。
 
-[アセット管理](AssetManagement.md)のインポートパイプラインの上に載っており、「csproj をインポートすると DLL が生成され、DLL が更新されるとユーザー ALC がリロードされる」という流れになる。
+[アセット管理](AssetManagement.md)のインポートパイプラインの上に載っており、「csproj をインポートすると DLL が生成され、DLL が更新されるとユーザー AssemblyLoadContext がリロードされる」という流れになる。
 
 ## インポート
 
 `CSharpProjectImporter`（`[AssetImporter(".csproj")]`）が csproj をアセットとしてインポートし、その一部として DLL へのコンパイルを行う。
+
+現在の .NET で利用される C# コンパイラ (Roslyn) は C# でセルフホストされ .NET 向けライブラリとして NuGet に公開されており、これを直接利用する。
 
 - `MSBuildWorkspace` でプロジェクトを開く。近年の Roslyn では MSBuild が別プロセスの BuildHost で動くため `MSBuildLocator` は不要
 - `BaseIntermediateOutputPath` / `BaseOutputPath` をグローバルプロパティで**アセットの成果物ディレクトリに向ける**。Assets ツリーの中に `bin` / `obj` を作らせないため。MSBuild は相対パスをプロジェクトディレクトリ基準で解決するので、これらは必ず絶対パスで渡す
@@ -30,7 +32,12 @@ public sealed partial class CompiledAssembly : ISerializableObject
 
 ## AssemblyLoadContext の構成
 
-`UserAssemblyLoadContext` は collectible な ALC で、**ユーザーがコンパイルした DLL のみ**を保持する。
+AssemblyLoadContext は .NET においてアセンブリ参照の解決スコープを分離するための仕組みである。独自に作成した ALC が解決しなかったアセンブリ参照はデフォルトの ALC にフォールバックされる。ALC 間の依存関係を単方向に整理することで、ある ALC に属するアセンブリをまとめてアンロードする、といった操作がしやすくなる。
+
+- [System.Runtime.Loader.AssemblyLoadContext について](https://learn.microsoft.com/ja-jp/dotnet/core/dependency-loading/understanding-assemblyloadcontext)
+- [.NET でアセンブリのアンロード機能を使用およびデバッグする方法](https://learn.microsoft.com/ja-jp/dotnet/standard/assembly/unloadability)
+
+DivisionEngine での実例を示す。`UserAssemblyLoadContext` は collectible な ALC で、**ユーザーがコンパイルした DLL のみ**を保持する。
 
 ```csharp
 public sealed class UserAssemblyLoadContext() : AssemblyLoadContext("DivisionUser", true)
@@ -53,24 +60,23 @@ DLL が更新されると（= `ScriptsDirty`）、ユーザー ALC をリロー�
 
 実際の手順は `AssetDatabase.ReloadScripts` が持つ（ライブオブジェクトグラフを所有しているのが `AssetDatabase` のため）。
 
-1. materialize 済みの全スコープを現在の状態でシリアライズしてメモリに退避する
+1. インスタンス化済みの全スコープを現在の状態でシリアライズしてメモリに退避する
 2. ライブオブジェクトグラフを破棄する（スコープ・ローダを全クリア）。これで旧 ALC への参照が消える
 3. `ScriptHost.Swap` で ALC を差し替える。以後の型解決は新しい `TypeResolver` を経由させる
 4. 退避したバイト列から `FileScopeLoader` を作ってスコープを再構築し、全オブジェクトを解決 → `DrainPending` でデシリアライズする
 
 オブジェクトの相互参照は `GlobalId` で表現されているのでリロードをまたいで復元される。一方で**インスタンスは別物になる**ため、データベース外部で参照を保持していた場合はリロード後に取り直す必要がある。
 
-`ScriptHost.Unload` はアンロード後に `GC.Collect` + `WaitForPendingFinalizers` を数回回す。ALC のアンロードは全参照が消えて初めて完了するベストエフォートな処理であり、リークがある場合は旧アセンブリが残り続ける。
+`ScriptHost.Unload` はアンロード後に `GC.Collect` + `WaitForPendingFinalizers` を数回回す。ALC のアンロードは (.NET Framework で利用できた AppDomain のような) 専制的なものではなく、全参照が消えて初めて完了する協調的な処理であり、リークがある場合は旧アセンブリが残り続ける。ALC 間に強いオブジェクト参照が残存しないようにエンジン側のコードを注意深く記述する必要がある。
 
 ### 型解決の優先順位
 
-`YamlDeserializer.ResolveType` は次の順で型を探す。
+`YamlDeserializer.ResolveType` は、シリアライズされた GUID 型ID（[シリアライゼーション](Serialization.md#型の識別)参照）から次の順で型を探す。
 
-1. `ITypeResolver`（リロード中に注入されるユーザー ALC のリゾルバ）
-2. `Type.GetType`
-3. ロード済みアセンブリの走査
+1. `ITypeResolver`（リロード中に注入されるユーザー ALC のリゾルバ。`[SerializedTypeRegistration]` から構築したマップ → 登録属性を持たないアセンブリ向けに `ISerializable` 実装型を走査したハッシュ索引）
+2. `SerializedTypeRegistry`（非 collectible アセンブリの登録属性）
 
-1 を最優先にするのは、AppDomain 上にまだ残っている**アンロード予定の古いアセンブリ**に型がバインドされるのを防ぐため。
+GUID でない型ID（旧形式の `Type.FullName`）は名前ベースの解決（`ITypeResolver` → `Type.GetType` → アセンブリ走査）にフォールバックする。1 を最優先にするのは、AppDomain 上にまだ残っている**アンロード予定の古いアセンブリ**に型がバインドされるのを防ぐため。
 
 ## エンジンループへの組み込み
 
@@ -85,5 +91,4 @@ DLL が更新されると（= `ScriptsDirty`）、ユーザー ALC をリロー�
 
 - `static` フィールドなどシリアライズ対象外の状態はリロードで失われる
 - リロードは全スコープを対象とする全体処理で、部分的なリロードはできない（型自体が差し替わるため。[シリアライゼーション](Serialization.md#クラス定義が変わる場合ホットリロード)参照）
-- 単一の `.cs` ファイルを直接スクリプトアセットとして扱う経路は未実装（現状 `.cs` は `RawBinaryImporter` で取り込まれ、コンパイルは csproj 経由）
 - コンパイルエラー時は `CompiledAssembly.Success = false` として診断のみ保持し、リロードは行わない。エディタ UI への提示は今後

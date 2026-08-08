@@ -50,7 +50,7 @@
 ```csharp
 public interface IAssetImporter : ISerializable
 {
-    int Version => 0;                       // ロジック変更時に上げてキャッシュを無効化
+    uint Version => 0;                       // ロジック変更時に上げてキャッシュを無効化
     void Import(AssetImportContext context);
 }
 ```

@@ -1,6 +1,6 @@
 # シリアライゼーション
 
-プレイヤー・オーサリング環境で共通のシリアライゼーションレイヤ。コアライブラリ `DivisionEngine` の `Serialization` 名前空間に実装され、[アセット管理](AssetManagement.md)や[スクリプティング](Scripting.md)のホットリロードはこの上に構築される。
+シーンやアセットのデータを永続化するために使用される共通のシリアライゼーションレイヤ。コアライブラリ `DivisionEngine` の `Serialization` 名前空間に実装され、[アセット管理](AssetManagement.md)や[スクリプティング](Scripting.md)のホットリロードはこの上に構築される。
 
 - フォーマット非依存の読み書きインターフェース（現状の実装バックエンドは YAML）
 - Source Generator によるシリアライザ実装の自動生成
@@ -37,7 +37,7 @@ IContainerSerializer / IContainerDeserializer ... オブジェクト単位のフ
 
 シリアライズの単位。複数の `ISerializableObject` を内包し、`Guid`（`ScopeId`）で識別する。通常はファイルシステム上の1ファイル（エディタにおける1アセットファイル、ランタイムにおけるバンドル済みアセット）に対応する。
 
-内部は `LocalId → ISerializableObject` の辞書と、実体の供給元である `ISerializationScopeLoader` を持つ。オブジェクトはスコープに**遅延で**materializeされる（`Resolve` 時にローダから生成される）。
+内部は `LocalId → ISerializableObject` の辞書と、実体の供給元である `ISerializationScopeLoader` を持つ。オブジェクトはスコープに**遅延で**インスタンス化される（`Resolve` 時にローダから生成される）。
 
 ## ISerializableObject
 
@@ -70,7 +70,7 @@ ID は書き込み・読み込みともに昇順ソートされている前提�
 
 ### ref struct 制約
 
-シリアライザ実装は可変の `ref struct`（`YamlSerializer` は `Utf8YamlEmitter` を、`YamlDeserializer` は `YamlParser` を値で保持する）。値コピーするとライタ／パーサの状態が分岐して壊れるため、**必ず `ref` で受け渡す**。インターフェースのメソッドはすべて
+シリアライザ実装は可変の `ref struct`（`YamlSerializer` は `Utf8YamlEmitter` を、`YamlDeserializer` は `YamlParser` を値で保持する）。値コピーするとwriter／parserの状態が分岐して壊れるため、**必ず `ref` で受け渡す**。インターフェースのメソッドはすべて
 
 ```csharp
 void Serialize<T>(ref T serializer) where T : ISerializer, allows ref struct
@@ -85,7 +85,7 @@ VYaml ベースの `YamlSerializer` / `YamlDeserializer`。キーはIDの文字�
 ```yaml
 # オブジェクト1件 = 1 YAML ドキュメント。複数オブジェクトは --- で区切る
 0: 0                                   # LocalId
-1: MyGame.Player                       # Type.FullName（アセンブリ名は含めない）
+1: 5f183b3cbe1c1c40b6efb32e35d66ffa   # 型ID（GUID。既定は Type.FullName の MD5、[TypeId] で固定可）
 2:                                     # フィールド本体
   1234: 42                             # スカラはそのまま
   2345: {0: 2, 1: "hello"}             # Blob: {kind, value}（ByteArray は base64）
@@ -97,7 +97,20 @@ VYaml ベースの `YamlSerializer` / `YamlDeserializer`。キーはIDの文字�
 ...
 ```
 
-型名に `Type.FullName` のみを使うのは、アセンブリ名を含めるとホットリロードで再コンパイルされたユーザーアセンブリと一致しなくなるため。解決は `ITypeResolver`（後述）→ `Type.GetType` → ロード済みアセンブリの走査、の順にフォールバックする。
+### 型の識別
+
+オブジェクトのフレーミングに書く型識別子は GUID の**安定型ID**（`SerializedTypeId.Get`、"N" 形式 32 桁 hex）。既定は `Type.FullName`（アセンブリ名は含めない。含めるとホットリロードで再コンパイルされたユーザーアセンブリと一致しなくなるため）の MD5 ハッシュ。
+
+クラス名や名前空間を変更したい場合は、変更前に `[TypeId("<GUID>")]` で現在の ID を固定すれば、ソース上に旧名を残さず既存データを壊さずにリネームできる。アナライザ `DIVSER005`（Info）が ID 未固定のシリアライズ対象クラスを検出し、付属の CodeFix（`DivisionEngine.Generators.CodeFixes`）が現在の名前から計算した GUID の `[TypeId]` を自動挿入する。一度付与した ID は変更しない。
+
+ハッシュは型名へ逆引きできないため、Source Generator が `ISerializable` を実装する（または `[AutoSerialization]`/`[TypeId]` の付いた）非ジェネリックな全クラスについてアセンブリ属性 `[SerializedTypeRegistration(id, type)]` を生成し、これが ID → 型解決の情報源になる。アセンブリ内の ID 重複はコンパイルエラー（`DIVSER003`）、GUID として不正な ID やジェネリック型への `[TypeId]` もエラー（`DIVSER004`）。ID の既定値計算は Generator（`SerializedTypeGuid`）とランタイム（`SerializedTypeId`）で一致している必要がある。
+
+デシリアライズ時の解決順は次の通り。
+
+1. `ITypeResolver`（スクリプトリロード時に注入されるユーザー ALC のリゾルバ。登録属性のマップ → Generator を通っていないアセンブリ向けに `ISerializable` 実装型を走査したハッシュ索引）
+2. `SerializedTypeRegistry` — 非 collectible なロード済みアセンブリの `[SerializedTypeRegistration]`。collectible な ALC を除外するのは、静的キャッシュが型を掴んでアンロードを妨げないようにするため
+
+GUID として解釈できない型 ID は移行前の旧形式（`Type.FullName`）とみなし、名前ベースの解決（`ITypeResolver` → `Type.GetType` → アセンブリ走査）にフォールバックする。
 
 ## フォーマッタ
 
