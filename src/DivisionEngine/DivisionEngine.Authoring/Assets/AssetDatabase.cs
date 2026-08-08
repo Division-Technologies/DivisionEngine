@@ -333,7 +333,7 @@ public sealed class AssetDatabase : IDisposable
         if (!File.Exists(path)) return;
 
         var metaPath = path + ".meta";
-        var meta = File.Exists(metaPath) ? AssetMeta.Read(metaPath) : null;
+        var meta = File.Exists(metaPath) ? AssetMeta.Read(metaPath, _typeResolver) : null;
         var importer = ResolveImporter(meta, path);
         if (importer is null) return;
 
@@ -360,7 +360,7 @@ public sealed class AssetDatabase : IDisposable
         if (!File.Exists(path)) return null;
 
         var metaPath = path + ".meta";
-        var meta = File.Exists(metaPath) ? AssetMeta.Read(metaPath) : null;
+        var meta = File.Exists(metaPath) ? AssetMeta.Read(metaPath, _typeResolver) : null;
         var importer = ResolveImporter(meta, path);
         if (importer is null) return null;
 
@@ -414,7 +414,7 @@ public sealed class AssetDatabase : IDisposable
     /// <summary>Registers an existing direct (importer-less) asset from its <c>.meta</c> sidecar.</summary>
     private void RegisterDirect(string path)
     {
-        var meta = AssetMeta.Read(path + ".meta");
+        var meta = AssetMeta.Read(path + ".meta", _typeResolver);
         var guid = new ScopeId(meta.Guid);
         Register(guid, path);
         _scopeFile[guid] = path;
@@ -435,7 +435,7 @@ public sealed class AssetDatabase : IDisposable
                     Reimport(dependentPath);
 
         var metaPath = path + ".meta";
-        var meta = File.Exists(metaPath) ? AssetMeta.Read(metaPath) : null;
+        var meta = File.Exists(metaPath) ? AssetMeta.Read(metaPath, _typeResolver) : null;
 
         if (ResolveImporter(meta, path) is not null)
         {

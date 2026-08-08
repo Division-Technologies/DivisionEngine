@@ -256,21 +256,30 @@ internal ref struct YamlDeserializer(
     }
 
     /// <summary>
-    ///     Objects are serialized with Type.FullName (assembly-agnostic, hot-reload friendly);
-    ///     Type.GetType only searches the calling assembly and mscorlib, so fall back to
-    ///     scanning loaded assemblies.
+    ///     Objects are framed with a stable serialized type ID: the [TypeId] GUID, or an MD5 hash
+    ///     of Type.FullName for types without one. IDs resolve through the generator-emitted
+    ///     [SerializedTypeRegistration] assembly attributes. Documents written before GUID type IDs
+    ///     contain the type's FullName instead; those fall back to name-based resolution.
     /// </summary>
-    private static Type? ResolveType(string name, ITypeResolver? typeResolver)
+    private static Type? ResolveType(string typeId, ITypeResolver? typeResolver)
     {
-        // A custom resolver (script hot-reload) takes precedence so user types bind to the active
-        // user AssemblyLoadContext rather than a stale one still present in the AppDomain.
-        if (typeResolver?.Resolve(name) is { } resolved) return resolved;
+        // The custom resolver (script hot-reload) takes precedence so user types bind to the
+        // active user AssemblyLoadContext rather than a stale one still present in the AppDomain.
+        if (Guid.TryParse(typeId, out var guid))
+        {
+            var canonical = guid.ToString("N");
+            if (typeResolver?.Resolve(canonical) is { } resolved) return resolved;
+            return SerializedTypeRegistry.Resolve(canonical);
+        }
 
-        if (Type.GetType(name) is { } type) return type;
+        // Legacy name-based document.
+        if (typeResolver?.Resolve(typeId) is { } legacyResolved) return legacyResolved;
+
+        if (Type.GetType(typeId) is { } type) return type;
         foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
         {
             if (assembly.IsDynamic) continue;
-            if (assembly.GetType(name) is { } found) return found;
+            if (assembly.GetType(typeId) is { } found) return found;
         }
 
         return null;

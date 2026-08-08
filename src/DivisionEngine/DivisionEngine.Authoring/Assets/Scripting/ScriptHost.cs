@@ -18,7 +18,7 @@ public sealed class ScriptHost
     private readonly List<Assembly> _assemblies = new();
     private UserAssemblyLoadContext? _context;
 
-    /// <summary>Resolves serialized user type names against the currently-loaded user assemblies.</summary>
+    /// <summary>Resolves serialized user type IDs against the currently-loaded user assemblies.</summary>
     public ITypeResolver TypeResolver { get; private set; } = EmptyResolver.Instance;
 
     /// <summary>The user assemblies currently loaded.</summary>
@@ -61,14 +61,66 @@ public sealed class ScriptHost
         }
     }
 
-    private sealed class UserTypeResolver(IReadOnlyList<Assembly> assemblies) : ITypeResolver
+    private sealed class UserTypeResolver : ITypeResolver
     {
-        public Type? Resolve(string fullName)
+        private readonly IReadOnlyList<Assembly> _assemblies;
+        private readonly Dictionary<string, Type> _registered = new();
+        private Dictionary<string, Type>? _hashIndex;
+
+        public UserTypeResolver(IReadOnlyList<Assembly> assemblies)
         {
+            _assemblies = assemblies;
+
+            // Serialized type IDs resolve through the generator-emitted assembly attributes;
+            // built here (rather than a global registry) so the map dies with this resolver on swap.
             foreach (var assembly in assemblies)
-                if (assembly.GetType(fullName) is { } type)
+            foreach (var registration in assembly.GetCustomAttributes<SerializedTypeRegistrationAttribute>())
+                if (Guid.TryParse(registration.Id, out var id))
+                    _registered.TryAdd(id.ToString("N"), registration.Type);
+        }
+
+        public Type? Resolve(string typeId)
+        {
+            if (_registered.TryGetValue(typeId, out var registered)) return registered;
+
+            if (Guid.TryParse(typeId, out _))
+            {
+                // Assemblies compiled without the source generator carry no registration
+                // attributes; index their serializable types by computed ID instead. User
+                // assemblies are few and the index dies with this resolver on swap.
+                _hashIndex ??= BuildHashIndex();
+                return _hashIndex.TryGetValue(typeId, out var hashed) ? hashed : null;
+            }
+
+            // Legacy name-based IDs from documents written before GUID type IDs.
+            foreach (var assembly in _assemblies)
+                if (assembly.GetType(typeId) is { } type)
                     return type;
             return null;
+        }
+
+        private Dictionary<string, Type> BuildHashIndex()
+        {
+            var index = new Dictionary<string, Type>();
+            foreach (var assembly in _assemblies)
+            {
+                Type?[] types;
+                try
+                {
+                    types = assembly.GetTypes();
+                }
+                catch (ReflectionTypeLoadException e)
+                {
+                    types = e.Types;
+                }
+
+                foreach (var type in types)
+                    if (type is { IsClass: true, IsAbstract: false } &&
+                        typeof(ISerializable).IsAssignableFrom(type))
+                        index.TryAdd(SerializedTypeId.Get(type), type);
+            }
+
+            return index;
         }
     }
 
@@ -76,7 +128,7 @@ public sealed class ScriptHost
     {
         public static readonly EmptyResolver Instance = new();
 
-        public Type? Resolve(string fullName)
+        public Type? Resolve(string typeId)
         {
             return null;
         }

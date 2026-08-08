@@ -25,6 +25,7 @@
         <ProjectReference Include="..\DivisionEngine\DivisionEngine.csproj"/>
         <ProjectReference Include="..\DivisionEngine.Authoring\DivisionEngine.Authoring.csproj"/>
         <ProjectReference Include="..\DivisionEngine.Generators\DivisionEngine.Generators\DivisionEngine.Generators.csproj" PrivateAssets="all" ReferenceOutputAssembly="false" OutputItemType="Analyzer"/>
+        <ProjectReference Include="../DivisionEngine.Generators/DivisionEngine.Generators.CodeFixes/DivisionEngine.Generators.CodeFixes.csproj" PrivateAssets="all" ReferenceOutputAssembly="false" OutputItemType="Analyzer"/>
     </ItemGroup>
 
 </Project>

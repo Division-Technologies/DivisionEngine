@@ -154,8 +154,7 @@ internal ref struct YamlSerializer(Utf8YamlEmitter emitter) : IContainerSerializ
         _emitter.WriteString("0");
         _emitter.WriteInt32(id.Value);
         _emitter.WriteString("1");
-        _emitter.WriteString(type.FullName ??
-                             throw new InvalidOperationException($"Type {type} does not have a full name."));
+        _emitter.WriteString(SerializedTypeId.Get(type));
         _emitter.WriteString("2");
         _emitter.BeginMapping();
     }

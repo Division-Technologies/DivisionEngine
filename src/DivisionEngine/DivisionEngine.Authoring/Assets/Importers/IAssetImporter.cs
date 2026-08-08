@@ -14,7 +14,7 @@ public interface IAssetImporter : ISerializable
     /// <summary>
     ///     Bumped when the importer's logic changes, to invalidate caches produced by older versions.
     /// </summary>
-    int Version => 0;
+    uint Version => 0;
 
     /// <summary>Reads <see cref="AssetImportContext.SourcePath" /> and emits the asset's objects.</summary>
     void Import(AssetImportContext context);

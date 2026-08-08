@@ -15,6 +15,7 @@
     <ItemGroup>
         <ProjectReference Include="..\DivisionEngine.Authoring\DivisionEngine.Authoring.csproj" Condition="'$(DivisionRuntimeAuthoring)' == 'true'"/>
         <ProjectReference Include="..\DivisionEngine.Generators\DivisionEngine.Generators\DivisionEngine.Generators.csproj" PrivateAssets="all" ReferenceOutputAssembly="false" OutputItemType="Analyzer"/>
+        <ProjectReference Include="../DivisionEngine.Generators/DivisionEngine.Generators.CodeFixes/DivisionEngine.Generators.CodeFixes.csproj" PrivateAssets="all" ReferenceOutputAssembly="false" OutputItemType="Analyzer"/>
         <ProjectReference Include="..\DivisionEngine\DivisionEngine.csproj"/>
     </ItemGroup>
 

@@ -105,6 +105,13 @@ public readonly record struct SerializationTargetInfo(
     public readonly string TypeName = TypeName;
 }
 
+public readonly record struct TypeRegistrationInfo(
+    string FullTypeRef,
+    string DisplayName,
+    string? ExplicitId,
+    string MetadataFullName,
+    bool IsGeneric);
+
 public readonly record struct CustomFormatterInfo(
     string RegistrationClassName,
     string TargetTypeOfExpr,
@@ -121,6 +128,8 @@ public class AutoSerializationGenerator : IIncrementalGenerator
     private const string SerializeAttributeFullName = "DivisionEngine.SerializeAttribute";
     private const string CustomFormatterAttributeFullName = "DivisionEngine.CustomFormatterAttribute";
     private const string FormatterRegistrationAttributeFullName = "DivisionEngine.FormatterRegistrationAttribute";
+    private const string TypeIdAttributeFullName = "DivisionEngine.TypeIdAttribute";
+    private const string SerializableInterfaceFullName = "DivisionEngine.ISerializable";
 
     private static readonly DiagnosticDescriptor DuplicateIdDescriptor = new(
         "DIVSER001",
@@ -134,6 +143,22 @@ public class AutoSerializationGenerator : IIncrementalGenerator
         "DIVSER002",
         "No formatter for serialized field type",
         "Field '{0}' in type '{1}' has type '{2}' which has no registered formatter (missing: {3}). Annotate a formatter with [CustomFormatter(typeof(...))], mark the type with [AutoSerialization], or implement ISerializableObject.",
+        "DivisionEngine.Serialization",
+        DiagnosticSeverity.Error,
+        true);
+
+    private static readonly DiagnosticDescriptor DuplicateTypeIdDescriptor = new(
+        "DIVSER003",
+        "Duplicate serialized type ID",
+        "Types '{0}' and '{1}' have the same serialized type ID \"{2}\". Serialized type IDs must be unique within an assembly.",
+        "DivisionEngine.Serialization",
+        DiagnosticSeverity.Error,
+        true);
+
+    private static readonly DiagnosticDescriptor InvalidTypeIdDescriptor = new(
+        "DIVSER004",
+        "Invalid [TypeId] usage",
+        "[TypeId] on '{0}' is invalid: the ID must be a parseable GUID string and the type must be non-generic",
         "DivisionEngine.Serialization",
         DiagnosticSeverity.Error,
         true);
@@ -200,6 +225,144 @@ public class AutoSerializationGenerator : IIncrementalGenerator
 
         context.RegisterSourceOutput(customFormatters,
             static (spc, info) => EmitFormatterRegistration(spc, info));
+
+        // Every non-generic serializable class needs a registration: the serialized type ID is a
+        // GUID (explicit [TypeId], or the hash of the type name), which cannot be reversed to a
+        // type name at resolution time. ISerializable implementors are matched semantically to
+        // cover hand-written implementations (e.g. stateless importers) as well.
+        var serializableClasses = context.SyntaxProvider
+            .CreateSyntaxProvider(
+                static (node, _) => node is ClassDeclarationSyntax { BaseList: not null },
+                static (ctx, ct) =>
+                {
+                    if (ctx.SemanticModel.GetDeclaredSymbol(ctx.Node, ct)
+                        is not INamedTypeSymbol symbol) return null;
+                    foreach (var implemented in symbol.AllInterfaces)
+                        if (implemented.ToDisplayString() == SerializableInterfaceFullName)
+                            return GetTypeRegistrationInfo(symbol);
+                    return null;
+                })
+            .Where(static info => info.HasValue)
+            .Select(static (info, _) => info!.Value)
+            .Collect();
+
+        var attributedClasses = context.SyntaxProvider
+            .ForAttributeWithMetadataName(
+                AutoSerializationAttributeFullName,
+                static (node, _) => node is ClassDeclarationSyntax,
+                static (ctx, _) => ctx.TargetSymbol is INamedTypeSymbol symbol
+                    ? GetTypeRegistrationInfo(symbol)
+                    : null)
+            .Where(static info => info.HasValue)
+            .Select(static (info, _) => info!.Value)
+            .Collect();
+
+        var typeIdClasses = context.SyntaxProvider
+            .ForAttributeWithMetadataName(
+                TypeIdAttributeFullName,
+                static (node, _) => node is ClassDeclarationSyntax,
+                static (ctx, _) => ctx.TargetSymbol is INamedTypeSymbol symbol
+                    ? GetTypeRegistrationInfo(symbol)
+                    : null)
+            .Where(static info => info.HasValue)
+            .Select(static (info, _) => info!.Value)
+            .Collect();
+
+        context.RegisterSourceOutput(serializableClasses.Combine(attributedClasses).Combine(typeIdClasses),
+            static (spc, pair) =>
+                EmitTypeRegistrations(spc, pair.Left.Left.AddRange(pair.Left.Right).AddRange(pair.Right)));
+    }
+
+    private static TypeRegistrationInfo? GetTypeRegistrationInfo(INamedTypeSymbol typeSymbol)
+    {
+        string? explicitId = null;
+        foreach (var attribute in typeSymbol.GetAttributes())
+            if (attribute.AttributeClass?.ToDisplayString() == TypeIdAttributeFullName &&
+                attribute.ConstructorArguments.Length >= 1)
+            {
+                explicitId = attribute.ConstructorArguments[0].Value as string ?? "";
+                break;
+            }
+
+        var isGeneric = false;
+        for (var t = typeSymbol; t != null; t = t.ContainingType)
+            if (t.Arity > 0)
+            {
+                isGeneric = true;
+                break;
+            }
+
+        return new TypeRegistrationInfo(
+            typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
+            typeSymbol.ToDisplayString(),
+            explicitId,
+            SerializedTypeGuid.MetadataFullName(typeSymbol),
+            isGeneric);
+    }
+
+    /// <summary>
+    ///     Emits one assembly-level [SerializedTypeRegistration] per serializable class so type
+    ///     resolvers can map serialized type IDs back to types without enumerating every type in
+    ///     the assembly.
+    /// </summary>
+    private static void EmitTypeRegistrations(SourceProductionContext spc,
+        ImmutableArray<TypeRegistrationInfo> infos)
+    {
+        if (infos.IsDefaultOrEmpty) return;
+
+        var seenTypes = new HashSet<string>();
+        var seenIds = new Dictionary<string, string>();
+        var lines = new List<string>();
+        foreach (var info in infos.OrderBy(static i => i.FullTypeRef, StringComparer.Ordinal))
+        {
+            // A class annotated with both [AutoSerialization] and [TypeId] arrives from both providers.
+            if (!seenTypes.Add(info.FullTypeRef)) continue;
+
+            string id;
+            if (info.ExplicitId is { } explicitId)
+            {
+                if (!Guid.TryParse(explicitId, out var guid) || info.IsGeneric)
+                {
+                    spc.ReportDiagnostic(Diagnostic.Create(
+                        InvalidTypeIdDescriptor,
+                        Location.None,
+                        info.DisplayName));
+                    continue;
+                }
+
+                id = guid.ToString("N");
+            }
+            else
+            {
+                // Generic classes are not object-framed (no Activator-based loading); skip.
+                if (info.IsGeneric) continue;
+                id = SerializedTypeGuid.ComputeDefault(info.MetadataFullName).ToString("N");
+            }
+
+            if (seenIds.TryGetValue(id, out var existing))
+            {
+                spc.ReportDiagnostic(Diagnostic.Create(
+                    DuplicateTypeIdDescriptor,
+                    Location.None,
+                    info.DisplayName, existing, id));
+                continue;
+            }
+
+            seenIds[id] = info.DisplayName;
+            lines.Add(
+                $"[assembly: global::DivisionEngine.SerializedTypeRegistration(\"{id}\", typeof({info.FullTypeRef}))]");
+        }
+
+        if (lines.Count == 0) return;
+
+        var source = new StringBuilder()
+            .AppendLine("// <auto-generated/>")
+            .AppendLine("#nullable enable")
+            .AppendLine()
+            .AppendLine(string.Join("\n", lines))
+            .ToString();
+
+        spc.AddSource("SerializedTypeRegistrations.g.cs", source);
     }
 
     private static SerializationTargetInfo? GetTargetInfo(

@@ -18,7 +18,7 @@ public sealed class AssetMeta
     /// <summary>The importer that produced this asset, or null for a direct (serialization-native) asset.</summary>
     public IAssetImporter? Importer;
 
-    public int ImporterVersion;
+    public uint ImporterVersion;
 
     /// <summary>
     ///     Extra source files this import consumed (beyond the source asset itself), stored relative to
@@ -32,12 +32,13 @@ public sealed class AssetMeta
 
     /// <summary>
     ///     Reads a <c>.meta</c> file: a header document followed by the importer serialized as a typed
-    ///     document (so its concrete type and settings are restored).
+    ///     document (so its concrete type and settings are restored). Pass the active user-ALC
+    ///     resolver so importer types defined in user code resolve against the loaded scripts.
     /// </summary>
-    public static AssetMeta Read(string path)
+    public static AssetMeta Read(string path, ITypeResolver? typeResolver = null)
     {
         var data = File.ReadAllBytes(path);
-        var deserializer = new YamlDeserializer(new YamlParser(new ReadOnlySequence<byte>(data)), null);
+        var deserializer = new YamlDeserializer(new YamlParser(new ReadOnlySequence<byte>(data)), null, typeResolver);
 
         if (!deserializer.TryBeginObject(out _, out var headerType))
             throw new InvalidDataException($"Malformed meta header in '{path}'.");
@@ -109,7 +110,7 @@ internal partial class AssetMetaHeader
     [Serialize] public List<Guid> Dependencies = new();
     [Serialize] public Guid Guid;
     [Serialize] public bool HasImporter;
-    [Serialize] public int ImporterVersion;
+    [Serialize] public uint ImporterVersion;
     [Serialize] public List<string> InputFiles = new();
     [Serialize] public int MainLocalId;
     [Serialize] public long SourceHash;
