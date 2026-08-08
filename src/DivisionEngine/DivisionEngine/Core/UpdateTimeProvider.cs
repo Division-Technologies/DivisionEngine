@@ -14,8 +14,7 @@ public struct UpdateTimeProvider : ITimeProvider
         }
 
         _prev = realtime;
-        time.Current = realtime.Seconds;
-        time.Delta = time.Current - _accumulated;
+        time = new Time(realtime.Seconds, realtime.Seconds - _accumulated);
         _accumulated += time.Delta;
         return true;
     }

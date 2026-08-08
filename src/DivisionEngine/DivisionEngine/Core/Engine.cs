@@ -21,7 +21,7 @@ public sealed class Engine(ILogger logger)
     {
         var sc = new DivisionSynchronizationContext();
         SynchronizationContext.SetSynchronizationContext(sc);
-        var time = new Time { Current = 0, Delta = 0 };
+        var time = new Time(0, 0);
 
         while (true)
         {

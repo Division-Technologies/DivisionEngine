@@ -1,7 +1,13 @@
 ﻿namespace DivisionEngine;
 
-public struct Time
+public readonly struct Time
 {
-    public double Current;
-    public double Delta;
+    public readonly double Current;
+    public readonly double Delta;
+
+    public Time(double current, double delta)
+    {
+        Current = current;
+        Delta = delta;
+    }
 }

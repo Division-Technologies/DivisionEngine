@@ -24,8 +24,7 @@ public struct FixedUpdateTimeProvider : ITimeProvider
             return false;
         }
 
-        time.Current = _accumulated + _frameCount++ * _fixedDeltaTime;
-        time.Delta = _fixedDeltaTime;
+        time = new Time(_accumulated + _frameCount++ * _fixedDeltaTime, _fixedDeltaTime);
         return true;
     }
 }
