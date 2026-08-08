@@ -38,7 +38,11 @@ public readonly struct EquatableArray<T> : IEquatable<EquatableArray<T>>, IEnume
     {
         var arr = AsImmutableArray();
         var hash = 0;
-        foreach (var item in arr) hash = hash * 31 + item.GetHashCode();
+        foreach (var item in arr)
+        {
+            hash = hash * 31 + item.GetHashCode();
+        }
+
         return hash;
     }
 

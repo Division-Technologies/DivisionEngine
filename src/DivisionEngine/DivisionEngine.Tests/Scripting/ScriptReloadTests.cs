@@ -17,7 +17,10 @@ public sealed class ScriptReloadTests
     [TearDown]
     public void TearDown()
     {
-        if (Directory.Exists(_dir)) Directory.Delete(_dir, true);
+        if (Directory.Exists(_dir))
+        {
+            Directory.Delete(_dir, true);
+        }
     }
 
     private string _dir = "";
@@ -86,8 +89,11 @@ public sealed class ScriptReloadTests
         var path = Path.Combine(_dir, name + ".dll");
         var result = compilation.Emit(path);
         if (!result.Success)
+        {
             Assert.Fail("user compile failed:\n" +
                         string.Join("\n", result.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)));
+        }
+
         return path;
     }
 }

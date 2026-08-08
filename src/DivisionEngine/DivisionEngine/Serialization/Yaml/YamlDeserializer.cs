@@ -27,8 +27,15 @@ internal ref struct YamlDeserializer(
 
     private bool TryRead(int id, ReadOnlySpan<byte> hintUtf8)
     {
-        if ((_modes?.TryPeek(out var mode) ?? false) && mode is YamlSerializationModeKind.Sequence) return true;
-        if (!TryReadNextId(out var nextId)) return false;
+        if ((_modes?.TryPeek(out var mode) ?? false) && mode is YamlSerializationModeKind.Sequence)
+        {
+            return true;
+        }
+
+        if (!TryReadNextId(out var nextId))
+        {
+            return false;
+        }
 
         if (nextId != id)
         {
@@ -42,43 +49,71 @@ internal ref struct YamlDeserializer(
 
     public bool Bool(int id, ReadOnlySpan<byte> hintUtf8)
     {
-        if (!TryRead(id, hintUtf8)) return default;
+        if (!TryRead(id, hintUtf8))
+        {
+            return default;
+        }
+
         return _parser.ReadScalarAsBool();
     }
 
     public sbyte I8(int id, ReadOnlySpan<byte> hintUtf8)
     {
-        if (!TryRead(id, hintUtf8)) return default;
+        if (!TryRead(id, hintUtf8))
+        {
+            return default;
+        }
+
         return (sbyte)_parser.ReadScalarAsInt32();
     }
 
     public short I16(int id, ReadOnlySpan<byte> hintUtf8)
     {
-        if (!TryRead(id, hintUtf8)) return default;
+        if (!TryRead(id, hintUtf8))
+        {
+            return default;
+        }
+
         return (short)_parser.ReadScalarAsInt32();
     }
 
     public int I32(int id, ReadOnlySpan<byte> hintUtf8)
     {
-        if (!TryRead(id, hintUtf8)) return default;
+        if (!TryRead(id, hintUtf8))
+        {
+            return default;
+        }
+
         return _parser.ReadScalarAsInt32();
     }
 
     public long I64(int id, ReadOnlySpan<byte> hintUtf8)
     {
-        if (!TryRead(id, hintUtf8)) return default;
+        if (!TryRead(id, hintUtf8))
+        {
+            return default;
+        }
+
         return _parser.ReadScalarAsInt64();
     }
 
     public float F32(int id, ReadOnlySpan<byte> hintUtf8)
     {
-        if (!TryRead(id, hintUtf8)) return default;
+        if (!TryRead(id, hintUtf8))
+        {
+            return default;
+        }
+
         return _parser.ReadScalarAsFloat();
     }
 
     public double F64(int id, ReadOnlySpan<byte> hintUtf8)
     {
-        if (!TryRead(id, hintUtf8)) return default;
+        if (!TryRead(id, hintUtf8))
+        {
+            return default;
+        }
+
         return _parser.ReadScalarAsDouble();
     }
 
@@ -114,8 +149,15 @@ internal ref struct YamlDeserializer(
 
     public ISerializableObject? ObjectReference(int id, ReadOnlySpan<byte> hintUtf8)
     {
-        if (resolver is null) throw new InvalidOperationException();
-        if (!TryBeginStruct(id, hintUtf8)) return null;
+        if (resolver is null)
+        {
+            throw new InvalidOperationException();
+        }
+
+        if (!TryBeginStruct(id, hintUtf8))
+        {
+            return null;
+        }
 
         if (!TryRead(0, "scope"u8))
         {
@@ -156,9 +198,16 @@ internal ref struct YamlDeserializer(
 
     public void EndArray()
     {
-        if (_modes?.Peek() is not YamlSerializationModeKind.Sequence) throw new InvalidOperationException();
+        if (_modes?.Peek() is not YamlSerializationModeKind.Sequence)
+        {
+            throw new InvalidOperationException();
+        }
+
         _modes.Pop();
-        while (_parser.CurrentEventType != ParseEventType.SequenceEnd) _parser.SkipCurrentNode();
+        while (_parser.CurrentEventType != ParseEventType.SequenceEnd)
+        {
+            _parser.SkipCurrentNode();
+        }
 
         _parser.Read();
 
@@ -168,7 +217,10 @@ internal ref struct YamlDeserializer(
 
     public bool TryBeginStruct(int id, ReadOnlySpan<byte> hintUtf8)
     {
-        if (!TryRead(id, hintUtf8)) return false;
+        if (!TryRead(id, hintUtf8))
+        {
+            return false;
+        }
 
         if (_parser.CurrentEventType is not ParseEventType.MappingStart)
         {
@@ -185,9 +237,16 @@ internal ref struct YamlDeserializer(
 
     public void EndStruct()
     {
-        if (_modes?.Peek() is not YamlSerializationModeKind.Mapping) throw new InvalidOperationException();
+        if (_modes?.Peek() is not YamlSerializationModeKind.Mapping)
+        {
+            throw new InvalidOperationException();
+        }
+
         _modes.Pop();
-        while (_parser.CurrentEventType != ParseEventType.MappingEnd) _parser.SkipCurrentNode();
+        while (_parser.CurrentEventType != ParseEventType.MappingEnd)
+        {
+            _parser.SkipCurrentNode();
+        }
 
         _parser.Read();
     }
@@ -198,19 +257,25 @@ internal ref struct YamlDeserializer(
     private bool SkipToContent()
     {
         while (true)
+        {
             switch (_parser.CurrentEventType)
             {
                 case ParseEventType.Nothing:
                 case ParseEventType.StreamStart:
                 case ParseEventType.DocumentStart:
                 case ParseEventType.DocumentEnd:
-                    if (!_parser.Read()) return false;
+                    if (!_parser.Read())
+                    {
+                        return false;
+                    }
+
                     continue;
                 case ParseEventType.StreamEnd:
                     return false;
                 default:
                     return true;
             }
+        }
     }
 
     public bool TryBeginObject(out LocalId id, [NotNullWhen(true)] out Type? type)
@@ -268,18 +333,36 @@ internal ref struct YamlDeserializer(
         if (Guid.TryParse(typeId, out var guid))
         {
             var canonical = guid.ToString("N");
-            if (typeResolver?.Resolve(canonical) is { } resolved) return resolved;
+            if (typeResolver?.Resolve(canonical) is { } resolved)
+            {
+                return resolved;
+            }
+
             return SerializedTypeRegistry.Resolve(canonical);
         }
 
         // Legacy name-based document.
-        if (typeResolver?.Resolve(typeId) is { } legacyResolved) return legacyResolved;
+        if (typeResolver?.Resolve(typeId) is { } legacyResolved)
+        {
+            return legacyResolved;
+        }
 
-        if (Type.GetType(typeId) is { } type) return type;
+        if (Type.GetType(typeId) is { } type)
+        {
+            return type;
+        }
+
         foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
         {
-            if (assembly.IsDynamic) continue;
-            if (assembly.GetType(typeId) is { } found) return found;
+            if (assembly.IsDynamic)
+            {
+                continue;
+            }
+
+            if (assembly.GetType(typeId) is { } found)
+            {
+                return found;
+            }
         }
 
         return null;

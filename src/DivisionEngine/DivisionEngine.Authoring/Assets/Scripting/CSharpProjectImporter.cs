@@ -59,8 +59,12 @@ public sealed class CSharpProjectImporter : IAssetImporter
 
         // Record every source file as an input dependency so edits re-trigger import.
         foreach (var document in project.Documents)
+        {
             if (document.FilePath is { } filePath)
+            {
                 context.DependsOnFile(filePath);
+            }
+        }
 
         var compilation = await project.GetCompilationAsync().ConfigureAwait(false);
         if (compilation is null)
@@ -75,8 +79,12 @@ public sealed class CSharpProjectImporter : IAssetImporter
         var result = compilation.Emit(stream);
         compiled.Success = result.Success;
         foreach (var diagnostic in result.Diagnostics)
+        {
             if (diagnostic.Severity is DiagnosticSeverity.Warning or DiagnosticSeverity.Error)
+            {
                 compiled.Diagnostics.Add(diagnostic.ToString());
+            }
+        }
 
         if (result.Success)
         {

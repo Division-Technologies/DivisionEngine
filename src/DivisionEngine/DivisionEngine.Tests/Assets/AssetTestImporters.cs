@@ -34,7 +34,11 @@ public partial class DependentImporter : IAssetImporter
     {
         Interlocked.Increment(ref ImportCount);
         var text = File.ReadAllText(context.SourcePath).Trim();
-        if (Guid.TryParse(text, out var dependency)) context.DependsOnAsset(new ScopeId(dependency));
+        if (Guid.TryParse(text, out var dependency))
+        {
+            context.DependsOnAsset(new ScopeId(dependency));
+        }
+
         context.SetMainObject(new AssetNode { Name = text });
     }
 }

@@ -14,7 +14,11 @@ internal ref struct YamlSerializer(Utf8YamlEmitter emitter) : IContainerSerializ
 
     private void WriteKey(int id, ReadOnlySpan<byte> hintUtf8)
     {
-        if ((_modes?.TryPeek(out var mode) ?? false) && mode == YamlSerializationModeKind.Sequence) return;
+        if ((_modes?.TryPeek(out var mode) ?? false) && mode == YamlSerializationModeKind.Sequence)
+        {
+            return;
+        }
+
         // NOTE: hint comments cannot be emitted here — WriteRaw right after a pending key
         // produces `"key":# hint`, where '#' (not preceded by whitespace) is not a comment
         // and corrupts the document.
@@ -86,10 +90,15 @@ internal ref struct YamlSerializer(Utf8YamlEmitter emitter) : IContainerSerializ
             case BlobKind.Utf16:
             {
                 if (value.IsEmpty)
+                {
                     _emitter.WriteString("");
+                }
                 else
+                {
                     _emitter.WriteString(
                         MemoryMarshal.Cast<byte, char>(MemoryMarshal.CreateReadOnlySpan(in value[0], value.Length)));
+                }
+
                 break;
             }
             default:
@@ -147,7 +156,11 @@ internal ref struct YamlSerializer(Utf8YamlEmitter emitter) : IContainerSerializ
     {
         // Each object is its own YAML document — multiple root mappings in one document
         // are not valid YAML, so separate them with an explicit document marker.
-        if (_hasDocument) _emitter.WriteRaw("---"u8, false, true);
+        if (_hasDocument)
+        {
+            _emitter.WriteRaw("---"u8, false, true);
+        }
+
         _hasDocument = true;
 
         _emitter.BeginMapping();

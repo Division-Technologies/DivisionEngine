@@ -17,14 +17,22 @@ internal sealed class ListFormatter<T> : IValueFormatter<List<T>>
 
         s.BeginArray(id, hint, value.Count);
         var formatter = FormatterStore<T>.Formatter;
-        foreach (var item in value) formatter.Serialize(ref s, 0, ""u8, in item);
+        foreach (var item in value)
+        {
+            formatter.Serialize(ref s, 0, ""u8, in item);
+        }
+
         s.EndArray();
     }
 
     public List<T> Deserialize<TD>(ref TD d, int id, ReadOnlySpan<byte> hint)
         where TD : IDeserializer, allows ref struct
     {
-        if (!d.TryBeginArray(id, hint, out var length)) return null!;
+        if (!d.TryBeginArray(id, hint, out var length))
+        {
+            return null!;
+        }
+
         if (length < 0)
         {
             d.EndArray();
@@ -33,7 +41,11 @@ internal sealed class ListFormatter<T> : IValueFormatter<List<T>>
 
         var result = new List<T>(length);
         var formatter = FormatterStore<T>.Formatter;
-        for (var i = 0; i < length; i++) result.Add(formatter.Deserialize(ref d, 0, ""u8));
+        for (var i = 0; i < length; i++)
+        {
+            result.Add(formatter.Deserialize(ref d, 0, ""u8));
+        }
+
         d.EndArray();
         return result;
     }
@@ -54,14 +66,22 @@ internal sealed class HashSetFormatter<T> : IValueFormatter<HashSet<T>>
 
         s.BeginArray(id, hint, value.Count);
         var formatter = FormatterStore<T>.Formatter;
-        foreach (var item in value) formatter.Serialize(ref s, 0, ""u8, in item);
+        foreach (var item in value)
+        {
+            formatter.Serialize(ref s, 0, ""u8, in item);
+        }
+
         s.EndArray();
     }
 
     public HashSet<T> Deserialize<TD>(ref TD d, int id, ReadOnlySpan<byte> hint)
         where TD : IDeserializer, allows ref struct
     {
-        if (!d.TryBeginArray(id, hint, out var length)) return null!;
+        if (!d.TryBeginArray(id, hint, out var length))
+        {
+            return null!;
+        }
+
         if (length < 0)
         {
             d.EndArray();
@@ -70,7 +90,11 @@ internal sealed class HashSetFormatter<T> : IValueFormatter<HashSet<T>>
 
         var result = new HashSet<T>(length);
         var formatter = FormatterStore<T>.Formatter;
-        for (var i = 0; i < length; i++) result.Add(formatter.Deserialize(ref d, 0, ""u8));
+        for (var i = 0; i < length; i++)
+        {
+            result.Add(formatter.Deserialize(ref d, 0, ""u8));
+        }
+
         d.EndArray();
         return result;
     }
@@ -107,7 +131,11 @@ internal sealed class DictionaryFormatter<TKey, TValue> : IValueFormatter<Dictio
     public Dictionary<TKey, TValue> Deserialize<TD>(ref TD d, int id, ReadOnlySpan<byte> hint)
         where TD : IDeserializer, allows ref struct
     {
-        if (!d.TryBeginArray(id, hint, out var length)) return null!;
+        if (!d.TryBeginArray(id, hint, out var length))
+        {
+            return null!;
+        }
+
         if (length < 0)
         {
             d.EndArray();
@@ -119,7 +147,11 @@ internal sealed class DictionaryFormatter<TKey, TValue> : IValueFormatter<Dictio
         var valueFormatter = FormatterStore<TValue>.Formatter;
         for (var i = 0; i < length; i++)
         {
-            if (!d.TryBeginStruct(0, ""u8)) continue;
+            if (!d.TryBeginStruct(0, ""u8))
+            {
+                continue;
+            }
+
             var k = keyFormatter.Deserialize(ref d, 0, "key"u8);
             var v = valueFormatter.Deserialize(ref d, 1, "value"u8);
             d.EndStruct();
@@ -151,7 +183,11 @@ internal sealed class NullableFormatter<T> : IValueFormatter<T?> where T : struc
     public T? Deserialize<TD>(ref TD d, int id, ReadOnlySpan<byte> hint)
         where TD : IDeserializer, allows ref struct
     {
-        if (!d.TryBeginStruct(id, hint)) return null;
+        if (!d.TryBeginStruct(id, hint))
+        {
+            return null;
+        }
+
         var hasValue = d.Bool(0, "hasValue"u8);
         T? result = hasValue ? FormatterStore<T>.Formatter.Deserialize(ref d, 1, "value"u8) : null;
         d.EndStruct();

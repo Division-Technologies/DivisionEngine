@@ -46,8 +46,14 @@ public sealed record ResolvedTypeInfo(
             var builder = ImmutableArray.CreateBuilder<string>();
             var unsupported = false;
             CollectRequirements(symbol, builder, ref unsupported);
-            if (unsupported) kind = ResolvedTypeKind.Unsupported;
-            else required = builder.ToImmutable();
+            if (unsupported)
+            {
+                kind = ResolvedTypeKind.Unsupported;
+            }
+            else
+            {
+                required = builder.ToImmutable();
+            }
         }
 
         return new ResolvedTypeInfo(
@@ -97,7 +103,9 @@ public sealed record ResolvedTypeInfo(
         }
 
         if (symbol is ITypeParameterSymbol || symbol is IPointerTypeSymbol || symbol.IsRefLikeType)
+        {
             return ResolvedTypeKind.Unsupported;
+        }
 
         return ResolvedTypeKind.Store;
     }
@@ -129,7 +137,10 @@ public sealed record ResolvedTypeInfo(
                 return;
         }
 
-        if (symbol.TypeKind == TypeKind.Enum) return;
+        if (symbol.TypeKind == TypeKind.Enum)
+        {
+            return;
+        }
 
         if (symbol is IArrayTypeSymbol array)
         {
@@ -144,13 +155,18 @@ public sealed record ResolvedTypeInfo(
         }
 
         if (symbol.AllInterfaces.Any(i => i.ToDisplayString() == SerializableObjectInterfaceFullName))
+        {
             return;
+        }
 
         if (symbol is INamedTypeSymbol named)
         {
             names.Add(named.OriginalDefinition.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat));
             foreach (var arg in named.TypeArguments)
+            {
                 CollectRequirements(arg, names, ref unsupported);
+            }
+
             return;
         }
 

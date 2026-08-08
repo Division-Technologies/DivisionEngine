@@ -69,7 +69,11 @@ internal readonly struct DateTimeOffsetFormatter : IValueFormatter<DateTimeOffse
     public DateTimeOffset Deserialize<TD>(ref TD d, int id, ReadOnlySpan<byte> hint)
         where TD : IDeserializer, allows ref struct
     {
-        if (!d.TryBeginStruct(id, hint)) return default;
+        if (!d.TryBeginStruct(id, hint))
+        {
+            return default;
+        }
+
         var ticks = d.I64(0, "ticks"u8);
         var offset = d.I64(1, "offset"u8);
         d.EndStruct();

@@ -63,7 +63,10 @@ public sealed class CSharpProjectImportSmokeTests
         }
         finally
         {
-            if (Directory.Exists(dir)) Directory.Delete(dir, true);
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, true);
+            }
         }
     }
 }

@@ -37,29 +37,50 @@ public sealed class TypeIdAnalyzer : DiagnosticAnalyzer
     private static void Analyze(SymbolAnalysisContext context)
     {
         // Only concrete classes are object-framed (instantiated by ID during deserialization).
-        if (context.Symbol is not INamedTypeSymbol { TypeKind: TypeKind.Class, IsAbstract: false } symbol) return;
+        if (context.Symbol is not INamedTypeSymbol { TypeKind: TypeKind.Class, IsAbstract: false } symbol)
+        {
+            return;
+        }
 
         for (var t = symbol; t != null; t = t.ContainingType)
+        {
             if (t.Arity > 0)
+            {
                 return;
+            }
+        }
 
         var isSerializable = false;
         foreach (var attribute in symbol.GetAttributes())
         {
             var name = attribute.AttributeClass?.ToDisplayString();
-            if (name == TypeIdAttributeFullName) return;
-            if (name == AutoSerializationAttributeFullName) isSerializable = true;
+            if (name == TypeIdAttributeFullName)
+            {
+                return;
+            }
+
+            if (name == AutoSerializationAttributeFullName)
+            {
+                isSerializable = true;
+            }
         }
 
         if (!isSerializable)
+        {
             foreach (var implemented in symbol.AllInterfaces)
+            {
                 if (implemented.ToDisplayString() == SerializableInterfaceFullName)
                 {
                     isSerializable = true;
                     break;
                 }
+            }
+        }
 
-        if (!isSerializable) return;
+        if (!isSerializable)
+        {
+            return;
+        }
 
         context.ReportDiagnostic(Diagnostic.Create(Descriptor, symbol.Locations[0], symbol.Name));
     }

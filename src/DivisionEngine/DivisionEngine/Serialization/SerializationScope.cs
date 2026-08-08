@@ -21,11 +21,23 @@ public sealed class SerializationScope : IDisposable
         foreach (var (localId, old) in source._objects)
         {
             var typeName = old.GetType().FullName;
-            if (typeName == null) continue;
+            if (typeName == null)
+            {
+                continue;
+            }
+
             var newType = Type.GetType(typeName);
-            if (newType == null) continue;
+            if (newType == null)
+            {
+                continue;
+            }
+
             var newObj = (ISerializableObject?)Activator.CreateInstance(newType);
-            if (newObj == null) continue;
+            if (newObj == null)
+            {
+                continue;
+            }
+
             newObj.Id = localId;
             newObj.Scope = this;
 
@@ -93,7 +105,10 @@ public sealed class SerializationScope : IDisposable
     {
         _loader.Dispose();
         _loader = loader;
-        foreach (var (_, obj) in _objects) _loader.Deserialize(obj, resolver);
+        foreach (var (_, obj) in _objects)
+        {
+            _loader.Deserialize(obj, resolver);
+        }
     }
 
     internal void Transfer(SerializationScope source, ISerializedObjectResolver resolver)
@@ -101,7 +116,11 @@ public sealed class SerializationScope : IDisposable
         var writer = new ArrayBufferWriter<byte>();
         foreach (var (localId, old) in source._objects)
         {
-            if (!_objects.TryGetValue(localId, out var newObj)) continue;
+            if (!_objects.TryGetValue(localId, out var newObj))
+            {
+                continue;
+            }
+
             var emitter = new Utf8YamlEmitter(writer);
             var serializer = new YamlSerializer(emitter);
             old.Serialize(ref serializer);

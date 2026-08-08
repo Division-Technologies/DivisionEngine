@@ -32,13 +32,19 @@ public sealed class TypeIdCodeFixProvider : CodeFixProvider
     public override async Task RegisterCodeFixesAsync(CodeFixContext context)
     {
         var root = await context.Document.GetSyntaxRootAsync(context.CancellationToken).ConfigureAwait(false);
-        if (root is null) return;
+        if (root is null)
+        {
+            return;
+        }
 
         foreach (var diagnostic in context.Diagnostics)
         {
             var declaration = root.FindToken(diagnostic.Location.SourceSpan.Start)
                 .Parent?.AncestorsAndSelf().OfType<ClassDeclarationSyntax>().FirstOrDefault();
-            if (declaration is null) continue;
+            if (declaration is null)
+            {
+                continue;
+            }
 
             context.RegisterCodeFix(
                 CodeAction.Create(
@@ -53,7 +59,10 @@ public sealed class TypeIdCodeFixProvider : CodeFixProvider
         Document document, ClassDeclarationSyntax declaration, CancellationToken ct)
     {
         var semanticModel = await document.GetSemanticModelAsync(ct).ConfigureAwait(false);
-        if (semanticModel?.GetDeclaredSymbol(declaration, ct) is not { } symbol) return document;
+        if (semanticModel?.GetDeclaredSymbol(declaration, ct) is not { } symbol)
+        {
+            return document;
+        }
 
         var id = SerializedTypeGuid.ComputeDefault(SerializedTypeGuid.MetadataFullName(symbol)).ToString("N");
 
@@ -70,7 +79,10 @@ public sealed class TypeIdCodeFixProvider : CodeFixProvider
             .WithAdditionalAnnotations(Formatter.Annotation);
 
         var root = await document.GetSyntaxRootAsync(ct).ConfigureAwait(false);
-        if (root is null) return document;
+        if (root is null)
+        {
+            return document;
+        }
 
         return document.WithSyntaxRoot(
             root.ReplaceNode(declaration, declaration.AddAttributeLists(attributeList)));

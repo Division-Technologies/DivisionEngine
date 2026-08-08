@@ -46,12 +46,18 @@ internal sealed class ImportCache(string directory)
         var hasher = new XxHash64();
         Append(hasher, sourcePath);
         foreach (var file in inputFiles.OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+        {
             Append(hasher, file);
+        }
+
         return unchecked((long)hasher.GetCurrentHashAsUInt64());
 
         static void Append(XxHash64 hasher, string path)
         {
-            if (File.Exists(path)) hasher.Append(File.ReadAllBytes(path));
+            if (File.Exists(path))
+            {
+                hasher.Append(File.ReadAllBytes(path));
+            }
         }
     }
 }

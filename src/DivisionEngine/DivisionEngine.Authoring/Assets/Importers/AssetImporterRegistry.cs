@@ -30,7 +30,10 @@ public static class AssetImporterRegistry
         Type? type;
         lock (Gate)
         {
-            if (!ByExtension.TryGetValue(Normalize(extension), out type)) return null;
+            if (!ByExtension.TryGetValue(Normalize(extension), out type))
+            {
+                return null;
+            }
         }
 
         return (IAssetImporter?)Activator.CreateInstance(type);
@@ -40,12 +43,20 @@ public static class AssetImporterRegistry
     {
         lock (Gate)
         {
-            if (_scanned) return;
+            if (_scanned)
+            {
+                return;
+            }
+
             _scanned = true;
 
             foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
             {
-                if (assembly.IsDynamic) continue;
+                if (assembly.IsDynamic)
+                {
+                    continue;
+                }
+
                 Type[] types;
                 try
                 {
@@ -59,9 +70,20 @@ public static class AssetImporterRegistry
                 foreach (var type in types)
                 {
                     var attribute = type.GetCustomAttribute<AssetImporterAttribute>();
-                    if (attribute is null) continue;
-                    if (!typeof(IAssetImporter).IsAssignableFrom(type)) continue;
-                    foreach (var extension in attribute.Extensions) ByExtension[Normalize(extension)] = type;
+                    if (attribute is null)
+                    {
+                        continue;
+                    }
+
+                    if (!typeof(IAssetImporter).IsAssignableFrom(type))
+                    {
+                        continue;
+                    }
+
+                    foreach (var extension in attribute.Extensions)
+                    {
+                        ByExtension[Normalize(extension)] = type;
+                    }
                 }
             }
         }

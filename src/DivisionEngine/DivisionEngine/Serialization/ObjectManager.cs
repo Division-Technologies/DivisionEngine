@@ -21,7 +21,10 @@ internal sealed class ObjectManager
 
         var resolver = new Resolver(newManager, false);
 
-        foreach (var (scopeId, scope) in Scopes) newManager.Scopes[scopeId].Transfer(scope, resolver);
+        foreach (var (scopeId, scope) in Scopes)
+        {
+            newManager.Scopes[scopeId].Transfer(scope, resolver);
+        }
 
 
         return newManager;
@@ -38,7 +41,11 @@ internal sealed class ObjectManager
             {
                 if (needReload)
                 {
-                    if (allowReload) throw new InvalidOperationException();
+                    if (allowReload)
+                    {
+                        throw new InvalidOperationException();
+                    }
+
                     _pendingReload.Enqueue(result);
                 }
 
@@ -50,7 +57,10 @@ internal sealed class ObjectManager
 
         public void ReloadAll()
         {
-            while (_pendingReload.TryDequeue(out var result)) result.Scope.Reload(result, this);
+            while (_pendingReload.TryDequeue(out var result))
+            {
+                result.Scope.Reload(result, this);
+            }
         }
     }
 }

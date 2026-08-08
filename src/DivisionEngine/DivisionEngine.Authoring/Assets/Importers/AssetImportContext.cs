@@ -52,7 +52,11 @@ public sealed class AssetImportContext
     /// <summary>Declares the asset's main object, adding it first if it has not been added yet.</summary>
     public void SetMainObject(ISerializableObject obj)
     {
-        if (!ReferenceEquals(obj.Scope, _scope)) AddObject(obj);
+        if (!ReferenceEquals(obj.Scope, _scope))
+        {
+            AddObject(obj);
+        }
+
         MainObject = obj;
     }
 

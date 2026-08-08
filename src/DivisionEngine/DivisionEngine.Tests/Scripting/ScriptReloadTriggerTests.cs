@@ -17,7 +17,10 @@ public sealed class ScriptReloadTriggerTests
     [TearDown]
     public void TearDown()
     {
-        if (Directory.Exists(_dir)) Directory.Delete(_dir, true);
+        if (Directory.Exists(_dir))
+        {
+            Directory.Delete(_dir, true);
+        }
     }
 
     private string _dir = "";
@@ -61,7 +64,10 @@ public sealed class ScriptReloadTriggerTests
         var path = Path.Combine(_dir, "trivial.dll");
         var result = compilation.Emit(path);
         if (!result.Success)
+        {
             Assert.Fail(string.Join("\n", result.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)));
+        }
+
         return path;
     }
 }

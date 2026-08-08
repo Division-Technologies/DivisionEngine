@@ -6,7 +6,10 @@ public class SystemGroup : ISystem
 
     public virtual void Execute(ref FrameContext ctx)
     {
-        foreach (var system in Systems) system.Execute(ref ctx);
+        foreach (var system in Systems)
+        {
+            system.Execute(ref ctx);
+        }
     }
 
     /// <summary>Adds a child system, executed after the systems already in the group.</summary>

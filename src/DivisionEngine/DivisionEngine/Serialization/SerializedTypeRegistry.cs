@@ -24,7 +24,10 @@ internal static class SerializedTypeRegistry
     {
         lock (Gate)
         {
-            if (Map.TryGetValue(typeId, out var cached)) return cached;
+            if (Map.TryGetValue(typeId, out var cached))
+            {
+                return cached;
+            }
 
             ScanNewAssemblies();
             return Map.TryGetValue(typeId, out var found) ? found : null;
@@ -35,13 +38,28 @@ internal static class SerializedTypeRegistry
     {
         foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
         {
-            if (assembly.IsDynamic) continue;
-            if (AssemblyLoadContext.GetLoadContext(assembly)?.IsCollectible ?? false) continue;
-            if (!Scanned.Add(assembly)) continue;
+            if (assembly.IsDynamic)
+            {
+                continue;
+            }
+
+            if (AssemblyLoadContext.GetLoadContext(assembly)?.IsCollectible ?? false)
+            {
+                continue;
+            }
+
+            if (!Scanned.Add(assembly))
+            {
+                continue;
+            }
 
             foreach (var registration in assembly.GetCustomAttributes<SerializedTypeRegistrationAttribute>())
+            {
                 if (Guid.TryParse(registration.Id, out var id))
+                {
                     Map.TryAdd(id.ToString("N"), registration.Type);
+                }
+            }
         }
     }
 }

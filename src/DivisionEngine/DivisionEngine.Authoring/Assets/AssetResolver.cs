@@ -17,10 +17,17 @@ internal sealed class AssetResolver(AssetDatabase database) : ISerializedObjectR
     public ISerializableObject? Resolve(GlobalId id)
     {
         var scope = database.GetOrLoadScope(id.ScopeId);
-        if (scope is null) return null;
+        if (scope is null)
+        {
+            return null;
+        }
 
         var obj = scope.Resolve(id.LocalId, out var needReload);
-        if (obj is not null && needReload) _pendingReload.Enqueue(obj);
+        if (obj is not null && needReload)
+        {
+            _pendingReload.Enqueue(obj);
+        }
+
         return obj;
     }
 
@@ -30,6 +37,9 @@ internal sealed class AssetResolver(AssetDatabase database) : ISerializedObjectR
     /// </summary>
     public void DrainPending()
     {
-        while (_pendingReload.TryDequeue(out var obj)) obj.Scope.Reload(obj, this);
+        while (_pendingReload.TryDequeue(out var obj))
+        {
+            obj.Scope.Reload(obj, this);
+        }
     }
 }

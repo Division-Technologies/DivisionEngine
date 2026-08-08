@@ -41,7 +41,10 @@ public sealed class AssetMeta
         var deserializer = new YamlDeserializer(new YamlParser(new ReadOnlySequence<byte>(data)), null, typeResolver);
 
         if (!deserializer.TryBeginObject(out _, out var headerType))
+        {
             throw new InvalidDataException($"Malformed meta header in '{path}'.");
+        }
+
         var header = (AssetMetaHeader)Activator.CreateInstance(headerType)!;
         ((ISerializable)header).Deserialize(ref deserializer);
         deserializer.EndObject();
@@ -50,7 +53,10 @@ public sealed class AssetMeta
         if (header.HasImporter)
         {
             if (!deserializer.TryBeginObject(out _, out var importerType))
+            {
                 throw new InvalidDataException($"Missing importer in meta '{path}'.");
+            }
+
             importer = (IAssetImporter)Activator.CreateInstance(importerType)!;
             importer.Deserialize(ref deserializer);
             deserializer.EndObject();

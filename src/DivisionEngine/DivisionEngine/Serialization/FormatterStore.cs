@@ -36,10 +36,15 @@ public static class FormatterRegistry
     public static void RegisterFactory(Type openGenericTarget, Type openGenericFormatter)
     {
         if (!openGenericTarget.IsGenericTypeDefinition)
+        {
             throw new ArgumentException($"{openGenericTarget} is not an open generic type.", nameof(openGenericTarget));
+        }
+
         if (!openGenericFormatter.IsGenericTypeDefinition)
+        {
             throw new ArgumentException($"{openGenericFormatter} is not an open generic type.",
                 nameof(openGenericFormatter));
+        }
 
         lock (Gate)
         {
@@ -51,19 +56,27 @@ public static class FormatterRegistry
     {
         lock (Gate)
         {
-            if (FormatterStore<T>.Stored is { } stored) return stored;
+            if (FormatterStore<T>.Stored is { } stored)
+            {
+                return stored;
+            }
 
             // Module initializers of an assembly only run once something in that assembly is
             // touched. Force them for every loaded assembly that declares formatter registrations
             // so resolution does not depend on initialization order.
             RunPendingModuleInitializers();
-            if (FormatterStore<T>.Stored is { } registered) return registered;
+            if (FormatterStore<T>.Stored is { } registered)
+            {
+                return registered;
+            }
 
             var fallback = CreateFallback<T>();
             if (fallback is null)
+            {
                 throw new InvalidOperationException(
                     $"No IValueFormatter<{typeof(T)}> is registered. " +
                     $"Annotate a formatter with [CustomFormatter(typeof({typeof(T).Name}))] or call FormatterRegistry.Register.");
+            }
 
             FormatterStore<T>.Stored = fallback;
             return fallback;
@@ -75,19 +88,27 @@ public static class FormatterRegistry
         var type = typeof(T);
 
         if (type.IsEnum)
+        {
             return (IValueFormatter<T>)Activator.CreateInstance(typeof(EnumFormatter<>).MakeGenericType(type))!;
+        }
 
         if (typeof(ISerializableObject).IsAssignableFrom(type) && type.IsClass)
+        {
             return (IValueFormatter<T>)Activator.CreateInstance(
                 typeof(ObjectReferenceFormatter<>).MakeGenericType(type))!;
+        }
 
         if (type.IsArray && type.GetArrayRank() == 1 && type.GetElementType() is { } element)
+        {
             return (IValueFormatter<T>)Activator.CreateInstance(typeof(ArrayFormatter<>).MakeGenericType(element))!;
+        }
 
         if (type.IsConstructedGenericType &&
             OpenGenericFactories.TryGetValue(type.GetGenericTypeDefinition(), out var openFormatter))
+        {
             return (IValueFormatter<T>)Activator.CreateInstance(
                 openFormatter.MakeGenericType(type.GenericTypeArguments))!;
+        }
 
         return null;
     }
@@ -96,9 +117,20 @@ public static class FormatterRegistry
     {
         foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
         {
-            if (assembly.IsDynamic) continue;
-            if (!ScannedAssemblies.Add(assembly)) continue;
-            if (!assembly.IsDefined(typeof(FormatterRegistrationAttribute))) continue;
+            if (assembly.IsDynamic)
+            {
+                continue;
+            }
+
+            if (!ScannedAssemblies.Add(assembly))
+            {
+                continue;
+            }
+
+            if (!assembly.IsDefined(typeof(FormatterRegistrationAttribute)))
+            {
+                continue;
+            }
 
             try
             {

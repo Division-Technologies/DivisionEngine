@@ -34,18 +34,25 @@ public sealed class ScriptHost
 
         _context = new UserAssemblyLoadContext();
         foreach (var path in dllPaths)
+        {
             _assemblies.Add(_context.LoadFromStream(new MemoryStream(File.ReadAllBytes(path))));
+        }
 
         foreach (var asm in _assemblies)
         foreach (var module in asm.GetModules())
+        {
             RuntimeHelpers.RunModuleConstructor(module.ModuleHandle);
+        }
 
         TypeResolver = new UserTypeResolver(_assemblies.ToArray());
     }
 
     private void Unload()
     {
-        if (_context is null) return;
+        if (_context is null)
+        {
+            return;
+        }
 
         _assemblies.Clear();
         TypeResolver = EmptyResolver.Instance;
@@ -75,13 +82,20 @@ public sealed class ScriptHost
             // built here (rather than a global registry) so the map dies with this resolver on swap.
             foreach (var assembly in assemblies)
             foreach (var registration in assembly.GetCustomAttributes<SerializedTypeRegistrationAttribute>())
+            {
                 if (Guid.TryParse(registration.Id, out var id))
+                {
                     _registered.TryAdd(id.ToString("N"), registration.Type);
+                }
+            }
         }
 
         public Type? Resolve(string typeId)
         {
-            if (_registered.TryGetValue(typeId, out var registered)) return registered;
+            if (_registered.TryGetValue(typeId, out var registered))
+            {
+                return registered;
+            }
 
             if (Guid.TryParse(typeId, out _))
             {
@@ -94,8 +108,13 @@ public sealed class ScriptHost
 
             // Legacy name-based IDs from documents written before GUID type IDs.
             foreach (var assembly in _assemblies)
+            {
                 if (assembly.GetType(typeId) is { } type)
+                {
                     return type;
+                }
+            }
+
             return null;
         }
 
@@ -115,9 +134,13 @@ public sealed class ScriptHost
                 }
 
                 foreach (var type in types)
+                {
                     if (type is { IsClass: true, IsAbstract: false } &&
                         typeof(ISerializable).IsAssignableFrom(type))
+                    {
                         index.TryAdd(SerializedTypeId.Get(type), type);
+                    }
+                }
             }
 
             return index;

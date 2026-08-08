@@ -40,7 +40,11 @@ public sealed class FileScopeLoader : ISerializationScopeLoader
 
     public ISerializableObject? Load(LocalId id)
     {
-        if (!_index.TryGetValue(id, out var type)) return null;
+        if (!_index.TryGetValue(id, out var type))
+        {
+            return null;
+        }
+
         return (ISerializableObject?)Activator.CreateInstance(type);
     }
 
@@ -79,7 +83,11 @@ public sealed class FileScopeLoader : ISerializationScopeLoader
         var collector = new ReferenceCollectingResolver(sink);
         foreach (var (id, type) in _index)
         {
-            if (Activator.CreateInstance(type) is not ISerializableObject obj) continue;
+            if (Activator.CreateInstance(type) is not ISerializableObject obj)
+            {
+                continue;
+            }
+
             obj.Id = id;
             Deserialize(obj, collector);
         }

@@ -63,7 +63,10 @@ public sealed class AssetDatabase : IDisposable
     /// <summary>Opens a project: the given asset root folders, with imports cached in the project cache dir.</summary>
     public AssetDatabase(IReadOnlyList<string> roots, string cacheDirectory) : this(cacheDirectory)
     {
-        foreach (var root in roots) _roots.Add(Normalize(root));
+        foreach (var root in roots)
+        {
+            _roots.Add(Normalize(root));
+        }
     }
 
     /// <summary>The asset root folders this database scans.</summary>
@@ -85,7 +88,11 @@ public sealed class AssetDatabase : IDisposable
     public void Dispose()
     {
         StopWatching();
-        foreach (var scope in _scopes.Values) scope.Dispose();
+        foreach (var scope in _scopes.Values)
+        {
+            scope.Dispose();
+        }
+
         _scopes.Clear();
     }
 
@@ -136,8 +143,15 @@ public sealed class AssetDatabase : IDisposable
             _pendingDeleted.Clear();
         }
 
-        foreach (var path in deleted) RemoveAsset(path);
-        foreach (var path in changed) ProcessChange(path);
+        foreach (var path in deleted)
+        {
+            RemoveAsset(path);
+        }
+
+        foreach (var path in changed)
+        {
+            ProcessChange(path);
+        }
     }
 
     /// <summary>
@@ -157,10 +171,18 @@ public sealed class AssetDatabase : IDisposable
 
         foreach (var root in _roots)
         {
-            if (!Directory.Exists(root)) continue;
+            if (!Directory.Exists(root))
+            {
+                continue;
+            }
+
             foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
             {
-                if (file.EndsWith(".meta", StringComparison.OrdinalIgnoreCase)) continue;
+                if (file.EndsWith(".meta", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
                 var path = Normalize(file);
                 present.Add(path);
                 SyncAsset(path);
@@ -168,7 +190,9 @@ public sealed class AssetDatabase : IDisposable
         }
 
         foreach (var path in _pathToGuid.Keys.Where(p => !present.Contains(p)).ToArray())
+        {
             RemoveAsset(path);
+        }
     }
 
     /// <summary>
@@ -246,7 +270,10 @@ public sealed class AssetDatabase : IDisposable
     /// <summary>Loads an asset's main object by GUID, resolving its (possibly cross-asset) references.</summary>
     public T? LoadAsset<T>(ScopeId guid) where T : class, ISerializableObject
     {
-        if (GetOrLoadScope(guid) is null) return null;
+        if (GetOrLoadScope(guid) is null)
+        {
+            return null;
+        }
 
         // Index the transitive closure of referenced scopes first. Once every needed scope is
         // indexed, materializing a referenced object is just Activator.CreateInstance — no file is
@@ -289,7 +316,11 @@ public sealed class AssetDatabase : IDisposable
     /// <summary>Reloads user assemblies if any changed since the last reload; otherwise a no-op.</summary>
     public void ReloadScriptsIfDirty(ScriptHost host)
     {
-        if (!ScriptsDirty) return;
+        if (!ScriptsDirty)
+        {
+            return;
+        }
+
         ScriptsDirty = false;
         ReloadScripts(host, _scriptDlls.Values.ToArray());
     }
@@ -299,11 +330,19 @@ public sealed class AssetDatabase : IDisposable
         // 1. Serialize every materialized scope's current runtime state.
         var saved = new Dictionary<ScopeId, byte[]>();
         foreach (var (guid, scope) in _scopes)
+        {
             if (scope.Objects.Count > 0)
+            {
                 saved[guid] = SerializeScope(scope);
+            }
+        }
 
         // 2. Drop the live object graph so no engine->user references keep the old context alive.
-        foreach (var scope in _scopes.Values) scope.Dispose();
+        foreach (var scope in _scopes.Values)
+        {
+            scope.Dispose();
+        }
+
         _scopes.Clear();
         _loaders.Clear();
 
@@ -322,47 +361,81 @@ public sealed class AssetDatabase : IDisposable
 
         var resolver = new AssetResolver(this);
         foreach (var guid in saved.Keys)
+        {
             if (_loaders[guid] is FileScopeLoader loader)
+            {
                 foreach (var localId in loader.ObjectIds)
+                {
                     resolver.Resolve(new GlobalId(guid, localId));
+                }
+            }
+        }
+
         resolver.DrainPending();
     }
 
     private void Reimport(string path, HashSet<ScopeId> visited)
     {
-        if (!File.Exists(path)) return;
+        if (!File.Exists(path))
+        {
+            return;
+        }
 
         var metaPath = path + ".meta";
         var meta = File.Exists(metaPath) ? AssetMeta.Read(metaPath, _typeResolver) : null;
         var importer = ResolveImporter(meta, path);
-        if (importer is null) return;
+        if (importer is null)
+        {
+            return;
+        }
 
         var guid = meta is not null ? new ScopeId(meta.Guid) : ScopeId.New();
-        if (!visited.Add(guid)) return;
+        if (!visited.Add(guid))
+        {
+            return;
+        }
 
         var run = RunImporter(path, importer, guid);
-        if (run is null) return; // import failed; already logged, skip this asset
+        if (run is null)
+        {
+            return; // import failed; already logged, skip this asset
+        }
 
         if (_scopes.TryGetValue(guid, out var scope) && _scopeFile.TryGetValue(guid, out var file))
+        {
             ReloadInPlace(guid, scope, file);
+        }
         else
+        {
             RegisterImportedScope(guid, run.Value);
+        }
+
         TrackScript(guid, run.Value.Main);
 
         foreach (var dependent in _dependencies.GetDependents(guid).ToArray())
+        {
             if (GetPath(dependent) is { } dependentPath)
+            {
                 Reimport(dependentPath, visited);
+            }
+        }
     }
 
     /// <summary>Imports the asset if it has an importer; returns its GUID, or null when it is not importable.</summary>
     private ScopeId? ImportInternal(string path)
     {
-        if (!File.Exists(path)) return null;
+        if (!File.Exists(path))
+        {
+            return null;
+        }
 
         var metaPath = path + ".meta";
         var meta = File.Exists(metaPath) ? AssetMeta.Read(metaPath, _typeResolver) : null;
         var importer = ResolveImporter(meta, path);
-        if (importer is null) return null;
+        if (importer is null)
+        {
+            return null;
+        }
 
         var guid = meta is not null ? new ScopeId(meta.Guid) : ScopeId.New();
         var cacheFile = _cache.PathFor(guid);
@@ -379,16 +452,29 @@ public sealed class AssetDatabase : IDisposable
             _dependencies.SetDependencies(guid, meta.Dependencies.Select(g => new ScopeId(g)));
             SetFileDependents(guid, inputFiles);
             // Cache hit has no produced main object in hand; load it only for the script importer.
-            if (importer is CSharpProjectImporter) TrackScript(guid, LoadAsset<CompiledAssembly>(guid));
+            if (importer is CSharpProjectImporter)
+            {
+                TrackScript(guid, LoadAsset<CompiledAssembly>(guid));
+            }
+
             return guid;
         }
 
         var run = RunImporter(path, importer, guid);
-        if (run is null) return null; // import failed; already logged, skip this asset
+        if (run is null)
+        {
+            return null; // import failed; already logged, skip this asset
+        }
+
         if (_scopes.TryGetValue(guid, out var scope) && _scopeFile.TryGetValue(guid, out var file))
+        {
             ReloadInPlace(guid, scope, file);
+        }
         else
+        {
             RegisterImportedScope(guid, run.Value);
+        }
+
         TrackScript(guid, run.Value.Main);
         return guid;
     }
@@ -399,7 +485,11 @@ public sealed class AssetDatabase : IDisposable
     /// </summary>
     private void TrackScript(ScopeId guid, ISerializableObject? main)
     {
-        if (main is not CompiledAssembly { Success: true } compiled || compiled.DllPath.Length == 0) return;
+        if (main is not CompiledAssembly { Success: true } compiled || compiled.DllPath.Length == 0)
+        {
+            return;
+        }
+
         _scriptDlls[guid] = compiled.DllPath;
         ScriptsDirty = true;
     }
@@ -407,8 +497,15 @@ public sealed class AssetDatabase : IDisposable
     /// <summary>Synchronizes one file found during <see cref="Refresh" />: import it, or register a direct asset.</summary>
     private void SyncAsset(string path)
     {
-        if (ImportInternal(path) is not null) return;
-        if (File.Exists(path + ".meta")) RegisterDirect(path);
+        if (ImportInternal(path) is not null)
+        {
+            return;
+        }
+
+        if (File.Exists(path + ".meta"))
+        {
+            RegisterDirect(path);
+        }
     }
 
     /// <summary>Registers an existing direct (importer-less) asset from its <c>.meta</c> sidecar.</summary>
@@ -424,15 +521,24 @@ public sealed class AssetDatabase : IDisposable
     private void ProcessChange(string path)
     {
         path = Normalize(path);
-        if (!File.Exists(path)) return;
+        if (!File.Exists(path))
+        {
+            return;
+        }
 
         // Re-import assets that consume this file as an input (e.g. a .cs behind a .csproj). This runs
         // independently of whether the file is itself an asset, so a script edit still rebuilds its
         // project even though the .cs is also imported (as a binary asset) below.
         if (_fileDependents.TryGetValue(path, out var dependents))
+        {
             foreach (var dependent in dependents.ToArray())
+            {
                 if (GetPath(dependent) is { } dependentPath)
+                {
                     Reimport(dependentPath);
+                }
+            }
+        }
 
         var metaPath = path + ".meta";
         var meta = File.Exists(metaPath) ? AssetMeta.Read(metaPath, _typeResolver) : null;
@@ -445,7 +551,9 @@ public sealed class AssetDatabase : IDisposable
         {
             RegisterDirect(path);
             if (GetGuid(path) is { } guid && _scopes.TryGetValue(guid, out var scope))
+            {
                 ReloadInPlace(guid, scope, path);
+            }
         }
     }
 
@@ -456,9 +564,21 @@ public sealed class AssetDatabase : IDisposable
     /// </summary>
     private static IAssetImporter? ResolveImporter(AssetMeta? meta, string path)
     {
-        if (meta?.Importer is not null) return meta.Importer;
-        if (AssetImporterRegistry.Resolve(Path.GetExtension(path)) is { } specific) return specific;
-        if (meta is not null) return null;
+        if (meta?.Importer is not null)
+        {
+            return meta.Importer;
+        }
+
+        if (AssetImporterRegistry.Resolve(Path.GetExtension(path)) is { } specific)
+        {
+            return specific;
+        }
+
+        if (meta is not null)
+        {
+            return null;
+        }
+
         return RawBinaryImporter.Instance;
     }
 
@@ -483,8 +603,16 @@ public sealed class AssetDatabase : IDisposable
 
     private void RemoveAsset(string path)
     {
-        if (!_pathToGuid.Remove(path, out var guid)) return;
-        if (_scopes.Remove(guid, out var scope)) scope.Dispose();
+        if (!_pathToGuid.Remove(path, out var guid))
+        {
+            return;
+        }
+
+        if (_scopes.Remove(guid, out var scope))
+        {
+            scope.Dispose();
+        }
+
         _loaders.Remove(guid);
         _mainIds.Remove(guid);
         _scopeFile.Remove(guid);
@@ -492,23 +620,35 @@ public sealed class AssetDatabase : IDisposable
         _dependencies.Remove(guid);
         SetFileDependents(guid, []);
         _assetInputs.Remove(guid);
-        if (_scriptDlls.Remove(guid)) ScriptsDirty = true;
+        if (_scriptDlls.Remove(guid))
+        {
+            ScriptsDirty = true;
+        }
     }
 
     /// <summary>Replaces the file -> dependent-asset edges for <paramref name="guid" />.</summary>
     private void SetFileDependents(ScopeId guid, IReadOnlyList<string> inputFiles)
     {
         if (_assetInputs.TryGetValue(guid, out var previous))
+        {
             foreach (var file in previous)
+            {
                 if (_fileDependents.TryGetValue(file, out var set))
+                {
                     set.Remove(guid);
+                }
+            }
+        }
 
         var inputs = inputFiles.Select(Normalize).ToArray();
         _assetInputs[guid] = inputs;
         foreach (var file in inputs)
         {
             if (!_fileDependents.TryGetValue(file, out var set))
+            {
                 _fileDependents[file] = set = new HashSet<ScopeId>();
+            }
+
             set.Add(guid);
         }
     }
@@ -576,8 +716,15 @@ public sealed class AssetDatabase : IDisposable
     /// </summary>
     internal SerializationScope? GetOrLoadScope(ScopeId guid)
     {
-        if (_scopes.TryGetValue(guid, out var scope)) return scope;
-        if (!_scopeFile.TryGetValue(guid, out var path)) return null;
+        if (_scopes.TryGetValue(guid, out var scope))
+        {
+            return scope;
+        }
+
+        if (!_scopeFile.TryGetValue(guid, out var path))
+        {
+            return null;
+        }
 
         var loader = new FileScopeLoader(File.ReadAllBytes(path), _typeResolver);
         scope = new SerializationScope(guid, loader);
@@ -599,11 +746,23 @@ public sealed class AssetDatabase : IDisposable
 
         while (queue.TryDequeue(out var guid))
         {
-            if (!visited.Add(guid)) continue;
-            if (GetOrLoadScope(guid) is null) continue;
+            if (!visited.Add(guid))
+            {
+                continue;
+            }
+
+            if (GetOrLoadScope(guid) is null)
+            {
+                continue;
+            }
+
             if (_loaders.GetValueOrDefault(guid) is FileScopeLoader loader)
+            {
                 foreach (var dependency in loader.CollectReferencedScopes())
+                {
                     queue.Enqueue(dependency);
+                }
+            }
         }
     }
 

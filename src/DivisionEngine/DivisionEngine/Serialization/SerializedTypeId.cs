@@ -22,7 +22,10 @@ public static class SerializedTypeId
 
     private static Guid Compute(Type type)
     {
-        if (type.GetCustomAttribute<TypeIdAttribute>(false) is { } attribute) return attribute.Id;
+        if (type.GetCustomAttribute<TypeIdAttribute>(false) is { } attribute)
+        {
+            return attribute.Id;
+        }
 
         var fullName = type.FullName ??
                        throw new InvalidOperationException($"Type {type} does not have a full name.");

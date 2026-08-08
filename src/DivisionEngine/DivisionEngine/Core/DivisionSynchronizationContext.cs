@@ -21,12 +21,18 @@ internal sealed class DivisionSynchronizationContext : SynchronizationContext
 
         var ctx = SendContext.Get(d, state);
         _queue.Enqueue((static state => { ((SendContext)state!).Execute(); }, ctx));
-        if (ctx.Wait() is { } ex) throw ex;
+        if (ctx.Wait() is { } ex)
+        {
+            throw ex;
+        }
     }
 
     public void Update()
     {
-        while (_queue.TryDequeue(out var item)) item.d(item.state);
+        while (_queue.TryDequeue(out var item))
+        {
+            item.d(item.state);
+        }
     }
 
     private class SendContext
@@ -39,7 +45,11 @@ internal sealed class DivisionSynchronizationContext : SynchronizationContext
 
         public static SendContext Get(SendOrPostCallback callback, object state)
         {
-            if (!_pool.TryDequeue(out var context)) context = new SendContext();
+            if (!_pool.TryDequeue(out var context))
+            {
+                context = new SendContext();
+            }
+
             context._semaphore.Wait();
             context._callback = callback;
             context._state = state;

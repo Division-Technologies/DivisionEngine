@@ -17,7 +17,11 @@ internal readonly struct Vector2Formatter : IValueFormatter<Vector2>
     public Vector2 Deserialize<TD>(ref TD d, int id, ReadOnlySpan<byte> hint)
         where TD : IDeserializer, allows ref struct
     {
-        if (!d.TryBeginStruct(id, hint)) return default;
+        if (!d.TryBeginStruct(id, hint))
+        {
+            return default;
+        }
+
         var v = new Vector2(d.F32(0, "x"u8), d.F32(1, "y"u8));
         d.EndStruct();
         return v;
@@ -40,7 +44,11 @@ internal readonly struct Vector3Formatter : IValueFormatter<Vector3>
     public Vector3 Deserialize<TD>(ref TD d, int id, ReadOnlySpan<byte> hint)
         where TD : IDeserializer, allows ref struct
     {
-        if (!d.TryBeginStruct(id, hint)) return default;
+        if (!d.TryBeginStruct(id, hint))
+        {
+            return default;
+        }
+
         var v = new Vector3(d.F32(0, "x"u8), d.F32(1, "y"u8), d.F32(2, "z"u8));
         d.EndStruct();
         return v;
@@ -64,7 +72,11 @@ internal readonly struct Vector4Formatter : IValueFormatter<Vector4>
     public Vector4 Deserialize<TD>(ref TD d, int id, ReadOnlySpan<byte> hint)
         where TD : IDeserializer, allows ref struct
     {
-        if (!d.TryBeginStruct(id, hint)) return default;
+        if (!d.TryBeginStruct(id, hint))
+        {
+            return default;
+        }
+
         var v = new Vector4(d.F32(0, "x"u8), d.F32(1, "y"u8), d.F32(2, "z"u8), d.F32(3, "w"u8));
         d.EndStruct();
         return v;
@@ -88,7 +100,11 @@ internal readonly struct QuaternionFormatter : IValueFormatter<Quaternion>
     public Quaternion Deserialize<TD>(ref TD d, int id, ReadOnlySpan<byte> hint)
         where TD : IDeserializer, allows ref struct
     {
-        if (!d.TryBeginStruct(id, hint)) return default;
+        if (!d.TryBeginStruct(id, hint))
+        {
+            return default;
+        }
+
         var v = new Quaternion(d.F32(0, "x"u8), d.F32(1, "y"u8), d.F32(2, "z"u8), d.F32(3, "w"u8));
         d.EndStruct();
         return v;
@@ -124,7 +140,11 @@ internal readonly struct Matrix4x4Formatter : IValueFormatter<Matrix4x4>
     public Matrix4x4 Deserialize<TD>(ref TD d, int id, ReadOnlySpan<byte> hint)
         where TD : IDeserializer, allows ref struct
     {
-        if (!d.TryBeginStruct(id, hint)) return default;
+        if (!d.TryBeginStruct(id, hint))
+        {
+            return default;
+        }
+
         var m = new Matrix4x4(
             d.F32(0, "m11"u8), d.F32(1, "m12"u8), d.F32(2, "m13"u8), d.F32(3, "m14"u8),
             d.F32(4, "m21"u8), d.F32(5, "m22"u8), d.F32(6, "m23"u8), d.F32(7, "m24"u8),

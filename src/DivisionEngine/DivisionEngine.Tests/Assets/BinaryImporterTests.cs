@@ -15,7 +15,10 @@ public sealed class BinaryImporterTests
     [TearDown]
     public void TearDown()
     {
-        if (Directory.Exists(_dir)) Directory.Delete(_dir, true);
+        if (Directory.Exists(_dir))
+        {
+            Directory.Delete(_dir, true);
+        }
     }
 
     private string _dir = "";

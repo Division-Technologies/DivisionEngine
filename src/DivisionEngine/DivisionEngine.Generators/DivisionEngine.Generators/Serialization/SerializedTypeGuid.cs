@@ -26,7 +26,9 @@ public static class SerializedTypeGuid
     {
         var parts = new List<string>();
         for (var t = symbol; t != null; t = t.ContainingType)
+        {
             parts.Insert(0, t.MetadataName);
+        }
 
         var name = string.Join("+", parts);
         var ns = symbol.ContainingNamespace;

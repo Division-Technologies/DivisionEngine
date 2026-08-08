@@ -19,7 +19,11 @@ public sealed class AssetWatcher : IDisposable
 
         foreach (var root in roots)
         {
-            if (!Directory.Exists(root)) continue;
+            if (!Directory.Exists(root))
+            {
+                continue;
+            }
+
             var watcher = new FileSystemWatcher(root)
             {
                 IncludeSubdirectories = true,
@@ -36,25 +40,43 @@ public sealed class AssetWatcher : IDisposable
 
     public void Dispose()
     {
-        foreach (var watcher in _watchers) watcher.Dispose();
+        foreach (var watcher in _watchers)
+        {
+            watcher.Dispose();
+        }
     }
 
     private void OnChanged(object sender, FileSystemEventArgs e)
     {
-        if (IsMeta(e.FullPath)) return;
+        if (IsMeta(e.FullPath))
+        {
+            return;
+        }
+
         _onChanged(e.FullPath);
     }
 
     private void OnDeleted(object sender, FileSystemEventArgs e)
     {
-        if (IsMeta(e.FullPath)) return;
+        if (IsMeta(e.FullPath))
+        {
+            return;
+        }
+
         _onDeleted(e.FullPath);
     }
 
     private void OnRenamed(object sender, RenamedEventArgs e)
     {
-        if (!IsMeta(e.OldFullPath)) _onDeleted(e.OldFullPath);
-        if (!IsMeta(e.FullPath)) _onChanged(e.FullPath);
+        if (!IsMeta(e.OldFullPath))
+        {
+            _onDeleted(e.OldFullPath);
+        }
+
+        if (!IsMeta(e.FullPath))
+        {
+            _onChanged(e.FullPath);
+        }
     }
 
     private static bool IsMeta(string path)

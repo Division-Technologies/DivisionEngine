@@ -15,17 +15,30 @@ internal sealed class AssetDependencyGraph
     {
         // Remove the asset's previous forward edges and their reverse counterparts.
         if (_forward.TryGetValue(asset, out var previous))
+        {
             foreach (var dependency in previous)
+            {
                 if (_reverse.TryGetValue(dependency, out var dependents))
+                {
                     dependents.Remove(asset);
+                }
+            }
+        }
 
         var edges = _forward[asset] = new HashSet<ScopeId>();
         foreach (var dependency in dependencies)
         {
-            if (dependency == asset) continue;
+            if (dependency == asset)
+            {
+                continue;
+            }
+
             edges.Add(dependency);
             if (!_reverse.TryGetValue(dependency, out var dependents))
+            {
                 _reverse[dependency] = dependents = new HashSet<ScopeId>();
+            }
+
             dependents.Add(asset);
         }
     }
@@ -40,13 +53,25 @@ internal sealed class AssetDependencyGraph
     public void Remove(ScopeId asset)
     {
         if (_forward.Remove(asset, out var dependencies))
+        {
             foreach (var dependency in dependencies)
+            {
                 if (_reverse.TryGetValue(dependency, out var dependents))
+                {
                     dependents.Remove(asset);
+                }
+            }
+        }
 
         if (_reverse.Remove(asset, out var reverseDependents))
+        {
             foreach (var dependent in reverseDependents)
+            {
                 if (_forward.TryGetValue(dependent, out var forwardEdges))
+                {
                     forwardEdges.Remove(asset);
+                }
+            }
+        }
     }
 }

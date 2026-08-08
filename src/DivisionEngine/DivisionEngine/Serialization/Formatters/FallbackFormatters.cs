@@ -74,14 +74,22 @@ internal sealed class ArrayFormatter<T> : IValueFormatter<T[]>
 
         s.BeginArray(id, hint, value.Length);
         var formatter = FormatterStore<T>.Formatter;
-        foreach (var item in value) formatter.Serialize(ref s, 0, ""u8, in item);
+        foreach (var item in value)
+        {
+            formatter.Serialize(ref s, 0, ""u8, in item);
+        }
+
         s.EndArray();
     }
 
     public T[] Deserialize<TD>(ref TD d, int id, ReadOnlySpan<byte> hint)
         where TD : IDeserializer, allows ref struct
     {
-        if (!d.TryBeginArray(id, hint, out var length)) return null!;
+        if (!d.TryBeginArray(id, hint, out var length))
+        {
+            return null!;
+        }
+
         if (length < 0)
         {
             d.EndArray();
@@ -90,7 +98,11 @@ internal sealed class ArrayFormatter<T> : IValueFormatter<T[]>
 
         var result = new T[length];
         var formatter = FormatterStore<T>.Formatter;
-        for (var i = 0; i < length; i++) result[i] = formatter.Deserialize(ref d, 0, ""u8);
+        for (var i = 0; i < length; i++)
+        {
+            result[i] = formatter.Deserialize(ref d, 0, ""u8);
+        }
+
         d.EndArray();
         return result;
     }
