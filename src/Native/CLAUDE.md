@@ -1,11 +1,6 @@
 # 共通ルール
-
 このファイルはトピックに依らない共通の指示を記述する。
 トピック固有のルールは[memory/MEMORY.md](memory/MEMORY.md)から参照する。
 
 ## 文体・表記
-
-- 英数字・コード片と日本語の境界に半角スペースを入れない
-  - 例: `compile_commands.jsonが置かれているディレクトリ`(○)
-  - 例: `compile_commands.json が置かれているディレクトリ`(×)
-  - コードブロック内や英語のみの段落は通常通り半角スペースを使用
+文体・表記ルールは[memory/writing-style.md](memory/writing-style.md)を参照する。

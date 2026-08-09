@@ -1,0 +1,45 @@
+{
+  "version": "2.0.0",
+  "options": {
+    "cwd": "${workspaceFolder}/src/Native"
+  },
+  "tasks": [
+    {
+      "label": "CMake: Configure (clang-debug)",
+      "type": "process",
+      "command": "cmake",
+      "args": ["--preset", "clang-debug"],
+      "problemMatcher": [],
+      "detail": "cmake --preset clang-debug"
+    },
+    {
+      "label": "CMake: Configure (clang-release)",
+      "type": "process",
+      "command": "cmake",
+      "args": ["--preset", "clang-release"],
+      "problemMatcher": [],
+      "detail": "cmake --preset clang-release"
+    },
+    {
+      "label": "CMake: Build (clang-debug)",
+      "type": "process",
+      "command": "cmake",
+      "args": ["--build", "--preset", "clang-debug"],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": "$gcc",
+      "detail": "cmake --build --preset clang-debug"
+    },
+    {
+      "label": "CMake: Build (clang-release)",
+      "type": "process",
+      "command": "cmake",
+      "args": ["--build", "--preset", "clang-release"],
+      "group": "build",
+      "problemMatcher": "$gcc",
+      "detail": "cmake --build --preset clang-release"
+    }
+  ]
+}
