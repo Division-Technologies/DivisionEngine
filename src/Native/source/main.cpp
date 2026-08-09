@@ -1,21 +1,22 @@
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
 #include <string_view>
 #include <vector>
-#include <array>
+
 #define UNICODE
 #define _UNICODE
 
 #include <Windows.h>
+#include <d3d12.h>
+#include <dxgi1_6.h>
 #include <tchar.h>
+#include <wrl/client.h>
 
 #include <exception>
 #include <string>
 
-#include <d3d12.h>
-#include <dxgi1_6.h>
-#include <wrl/client.h>
 
 import Printer;
 
@@ -64,56 +65,37 @@ int main() {
             wrc.right - wrc.left, wrc.bottom - wrc.top,
             nullptr, nullptr, w.hInstance, nullptr
         );
-        ShowWindow(hwnd, SW_SHOW);
-
-        MSG msg{};
-        while (true) {
-            if (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
-                if (msg.message == WM_QUIT) {
-                    break;
-                }
-
-                TranslateMessage(&msg);  // キーボード入力などを文字コードに変換する.
-                DispatchMessageW(&msg);  // ウィンドウプロシージャにメッセージを送る.
-            } else {
-            }
-        }
-
-        UnregisterClassW(w.lpszClassName, w.hInstance);
-
 
         ///
         //  DirectX 12
-        // 
+        //
         ComPtr<IDXGIFactory6> factory;
         ComPtr<IDXGIAdapter> dxgi_adapter;
-        if(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory)) == S_OK){
+        if (CreateDXGIFactory2(0, IID_PPV_ARGS(&factory)) == S_OK) {
             // アダプターを列挙.
             uint32_t i = 0;
             std::vector<ComPtr<IDXGIAdapter>> adapters;
             ComPtr<IDXGIAdapter> adapter;
-            
-            while(factory->EnumAdapters(i, adapter.ReleaseAndGetAddressOf()) != DXGI_ERROR_NOT_FOUND) 
-            {
-                adapters.push_back(adapter); 
+
+            while (factory->EnumAdapters(i, adapter.ReleaseAndGetAddressOf()) != DXGI_ERROR_NOT_FOUND) {
+                adapters.push_back(adapter);
                 ++i;
             }
 
             DXGI_ADAPTER_DESC desc{};
-            for(const auto& apt : adapters){
+            for (const auto& apt : adapters) {
                 apt->GetDesc(&desc);
                 const std::wstring_view wdesc{
                     std::begin(desc.Description),
                     std::end(desc.Description)
                 };
 
-                if(wdesc.find(L"NVIDIA") != std::wstring_view::npos){
+                if (wdesc.find(L"NVIDIA") != std::wstring_view::npos) {
                     dxgi_adapter = apt;
                     break;
                 }
             }
         }
-
 
         ComPtr<ID3D12Device> device;
         D3D12CreateDevice(
@@ -169,7 +151,7 @@ int main() {
         D3D12_DESCRIPTOR_HEAP_DESC heap_desc{};
         heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
         heap_desc.NodeMask = 0;
-        heap_desc.NumDescriptors = 2;   // 裏表
+        heap_desc.NumDescriptors = 2;  // 裏表
         heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
 
         ComPtr<ID3D12DescriptorHeap> rtv_heap;
@@ -188,26 +170,43 @@ int main() {
             device->CreateRenderTargetView(back_buffers[i].Get(), nullptr, rtv_handle);
         }
 
-        // メインループ
-        command_allocator->Reset();
-        const auto bb_idx = swapchain->GetCurrentBackBufferIndex();
-        auto rtv_handle = rtv_heap->GetCPUDescriptorHandleForHeapStart();
-        rtv_handle.ptr += static_cast<SIZE_T>(bb_idx) * device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
-        command_list->OMSetRenderTargets(1, &rtv_handle, true, nullptr);
 
-        const std::array<float, 4> clear_color{1.0f, 1.0f, 1.0f, 1.0f};
-        command_list->ClearRenderTargetView(rtv_handle, clear_color.data(), 0, nullptr);
+        ShowWindow(hwnd, SW_SHOW);
 
-        command_list->Close();
-        const std::array<ID3D12CommandList*, 1> command_lists{command_list.Get()};
-        command_queue->ExecuteCommandLists(
-            static_cast<UINT>(command_lists.size()), command_lists.data()
-        );
+        MSG msg{};
+        while (true) {
+            if (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+                if (msg.message == WM_QUIT) {
+                    break;
+                }
 
-        command_allocator->Reset();
-        command_list->Reset(command_allocator.Get(), nullptr);
+                TranslateMessage(&msg);  // キーボード入力などを文字コードに変換する.
+                DispatchMessageW(&msg);  // ウィンドウプロシージャにメッセージを送る.
 
-        swapchain->Present(1, 0);
+
+                const auto bb_idx = swapchain->GetCurrentBackBufferIndex();
+                auto rtv_handle = rtv_heap->GetCPUDescriptorHandleForHeapStart();
+                rtv_handle.ptr += static_cast<SIZE_T>(bb_idx) * device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+                command_list->OMSetRenderTargets(1, &rtv_handle, true, nullptr);
+
+                const std::array<float, 4> clear_color{1.0f, 1.0f, 1.0f, 1.0f};
+                command_list->ClearRenderTargetView(rtv_handle, clear_color.data(), 0, nullptr);
+
+                command_list->Close();
+                const std::array<ID3D12CommandList*, 1> command_lists{command_list.Get()};
+                command_queue->ExecuteCommandLists(
+                    static_cast<UINT>(command_lists.size()), command_lists.data()
+                );
+
+                command_allocator->Reset();
+                command_list->Reset(command_allocator.Get(), nullptr);
+
+                swapchain->Present(1, 0);
+            } else {
+            }
+        }
+
+        UnregisterClassW(w.lpszClassName, w.hInstance);
 
         return 0;
     } catch (const std::exception& e) {
