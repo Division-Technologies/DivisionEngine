@@ -129,7 +129,18 @@ int main() {
         command_queue_desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
         command_queue_desc.NodeMask = 0;
         command_queue_desc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
-        device->CreateCommandQueue(&command_queue_desc, IID_PPV_ARGS(&command_queue));
+        device->CreateCommandQueue(&command_queue_desc, IID_PPV_ARGS(command_queue.put()));
+
+        com_ptr<ID3D12Fence> fence;
+        winrt::check_hresult(
+            device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(fence.put()))
+        );
+        uint64_t fence_value = 0;
+
+        const winrt::handle fence_event{CreateEventW(nullptr, FALSE, FALSE, nullptr)};
+        if (!fence_event) {
+            winrt::throw_last_error();
+        }
 
         // スワップチェーン.
         DXGI_SWAP_CHAIN_DESC1 swapchain_desc{};
@@ -192,8 +203,22 @@ int main() {
                 TranslateMessage(&msg);  // キーボード入力などを文字コードに変換する.
                 DispatchMessageW(&msg);  // ウィンドウプロシージャにメッセージを送る.
 
-
                 const auto bb_idx = swapchain->GetCurrentBackBufferIndex();
+
+                // バックバッファをPRESENTからRENDER_TARGETへ遷移させる.
+                D3D12_RESOURCE_BARRIER barrier_desc{};
+                barrier_desc.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+                barrier_desc.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+                // Transitionは共用体メンバだが、D3D12のAPI仕様上ここを埋める以外にない.
+                // NOLINTBEGIN(cppcoreguidelines-pro-type-union-access)
+                barrier_desc.Transition.pResource = back_buffers[bb_idx].get();
+                barrier_desc.Transition.Subresource = 0;
+                barrier_desc.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+                barrier_desc.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+                // NOLINTEND(cppcoreguidelines-pro-type-union-access)
+
+                command_list->ResourceBarrier(1, &barrier_desc);
+
                 auto rtv_handle = rtv_heap->GetCPUDescriptorHandleForHeapStart();
                 rtv_handle.ptr += static_cast<SIZE_T>(bb_idx) * device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
                 command_list->OMSetRenderTargets(1, &rtv_handle, true, nullptr);
@@ -201,11 +226,28 @@ int main() {
                 const std::array<float, 4> clear_color{1.0f, 1.0f, 1.0f, 1.0f};
                 command_list->ClearRenderTargetView(rtv_handle, clear_color.data(), 0, nullptr);
 
+                // NOLINTBEGIN(cppcoreguidelines-pro-type-union-access)
+                barrier_desc.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+                barrier_desc.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+                // NOLINTEND(cppcoreguidelines-pro-type-union-access)
+                command_list->ResourceBarrier(1, &barrier_desc);
+
                 command_list->Close();
                 const std::array<ID3D12CommandList*, 1> command_lists{command_list.get()};
                 command_queue->ExecuteCommandLists(
                     static_cast<UINT>(command_lists.size()), command_lists.data()
                 );
+
+                ++fence_value;
+                winrt::check_hresult(command_queue->Signal(fence.get(), fence_value));
+
+                if (fence->GetCompletedValue() < fence_value) {
+                    winrt::check_hresult(
+                        fence->SetEventOnCompletion(fence_value, fence_event.get())
+                    );
+
+                    WaitForSingleObject(fence_event.get(), INFINITE);  // Fenceが完了するまで待機.
+                }
 
                 command_allocator->Reset();
                 command_list->Reset(command_allocator.get(), nullptr);
