@@ -1,26 +1,28 @@
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <iterator>
-#include <string_view>
-#include <vector>
-
+#ifndef UNICODE
 #define UNICODE
+#endif
+#ifndef _UNICODE
 #define _UNICODE
+#endif
 
 #include <Windows.h>
 #include <d3d12.h>
 #include <dxgi1_6.h>
-#include <tchar.h>
-#include <wrl/client.h>
+#include <winrt/base.h>
 
+#include <array>
+#include <cstdint>
 #include <exception>
+#include <iterator>
 #include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 
 import Printer;
 
-using Microsoft::WRL::ComPtr;
+using winrt::com_ptr;
 
 
 LRESULT WindowProcedure(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
@@ -34,15 +36,15 @@ LRESULT WindowProcedure(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
 }
 
 void EnableDebugLayer() {
-    ComPtr<ID3D12Debug> debug_controller;
-    if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug_controller)))) {
+    com_ptr<ID3D12Debug> debug_controller;
+    if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(debug_controller.put())))) {
         debug_controller->EnableDebugLayer();
     }
 }
 
 int main() {
     try {
-        WNDCLASSEX w{};
+        WNDCLASSEXW w{};
         w.cbSize = sizeof(w);
         w.lpfnWndProc = WindowProcedure;  // コールバック関数を指定.
         w.lpszClassName = L"DivisionEngine";
@@ -66,20 +68,26 @@ int main() {
             nullptr, nullptr, w.hInstance, nullptr
         );
 
+#ifdef _DEBUG
+        EnableDebugLayer();
+#endif
+
         ///
         //  DirectX 12
         //
-        ComPtr<IDXGIFactory6> factory;
-        ComPtr<IDXGIAdapter> dxgi_adapter;
-        if (CreateDXGIFactory2(0, IID_PPV_ARGS(&factory)) == S_OK) {
+        com_ptr<IDXGIFactory6> factory;
+        com_ptr<IDXGIAdapter> dxgi_adapter;
+        if (CreateDXGIFactory2(DXGI_CREATE_FACTORY_DEBUG, IID_PPV_ARGS(factory.put())) == S_OK) {
             // アダプターを列挙.
-            uint32_t i = 0;
-            std::vector<ComPtr<IDXGIAdapter>> adapters;
-            ComPtr<IDXGIAdapter> adapter;
+            // com_ptr::putは空であることを前提とするため、毎回新しい変数で受ける.
+            std::vector<com_ptr<IDXGIAdapter>> adapters;
+            for (uint32_t i = 0;; ++i) {
+                com_ptr<IDXGIAdapter> adapter;
+                if (factory->EnumAdapters(i, adapter.put()) == DXGI_ERROR_NOT_FOUND) {
+                    break;
+                }
 
-            while (factory->EnumAdapters(i, adapter.ReleaseAndGetAddressOf()) != DXGI_ERROR_NOT_FOUND) {
-                adapters.push_back(adapter);
-                ++i;
+                adapters.push_back(std::move(adapter));
             }
 
             DXGI_ADAPTER_DESC desc{};
@@ -97,25 +105,25 @@ int main() {
             }
         }
 
-        ComPtr<ID3D12Device> device;
+        com_ptr<ID3D12Device> device;
         D3D12CreateDevice(
-            dxgi_adapter.Get(), D3D_FEATURE_LEVEL_12_1, IID_PPV_ARGS(&device)
+            dxgi_adapter.get(), D3D_FEATURE_LEVEL_12_1, IID_PPV_ARGS(device.put())
         );
 
-        ComPtr<IDXGISwapChain4> swapchain;
+        com_ptr<IDXGISwapChain4> swapchain;
 
         // コマンドリスト.
-        ComPtr<ID3D12CommandAllocator> command_allocator;
+        com_ptr<ID3D12CommandAllocator> command_allocator;
         device->CreateCommandAllocator(
-            D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&command_allocator)
+            D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(command_allocator.put())
         );
 
-        ComPtr<ID3D12GraphicsCommandList> command_list;
+        com_ptr<ID3D12GraphicsCommandList> command_list;
         device->CreateCommandList(
-            0, D3D12_COMMAND_LIST_TYPE_DIRECT, command_allocator.Get(), nullptr, IID_PPV_ARGS(&command_list)
+            0, D3D12_COMMAND_LIST_TYPE_DIRECT, command_allocator.get(), nullptr, IID_PPV_ARGS(command_list.put())
         );
 
-        ComPtr<ID3D12CommandQueue> command_queue;
+        com_ptr<ID3D12CommandQueue> command_queue;
         D3D12_COMMAND_QUEUE_DESC command_queue_desc{};
         command_queue_desc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
         command_queue_desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
@@ -139,13 +147,14 @@ int main() {
         swapchain_desc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
 
         // CreateSwapChainForHwndはIDXGISwapChain1**しか受け取らないため、
-        // 一旦v1で受けてからAs(=QueryInterface)でv4へ変換する.
-        ComPtr<IDXGISwapChain1> tmp_swapchain;
+        // 一旦v1で受けてからas(=QueryInterface)でv4へ変換する.
+        com_ptr<IDXGISwapChain1> tmp_swapchain;
         const auto result = factory->CreateSwapChainForHwnd(
-            command_queue.Get(), hwnd, &swapchain_desc, nullptr, nullptr, &tmp_swapchain
+            command_queue.get(), hwnd, &swapchain_desc, nullptr, nullptr, tmp_swapchain.put()
         );
         if (SUCCEEDED(result)) {
-            tmp_swapchain.As(&swapchain);
+            // 変換に失敗した場合はhresult_errorを投げる.
+            swapchain = tmp_swapchain.as<IDXGISwapChain4>();
         }
 
         D3D12_DESCRIPTOR_HEAP_DESC heap_desc{};
@@ -154,20 +163,20 @@ int main() {
         heap_desc.NumDescriptors = 2;  // 裏表
         heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
 
-        ComPtr<ID3D12DescriptorHeap> rtv_heap;
-        device->CreateDescriptorHeap(&heap_desc, IID_PPV_ARGS(&rtv_heap));
+        com_ptr<ID3D12DescriptorHeap> rtv_heap;
+        device->CreateDescriptorHeap(&heap_desc, IID_PPV_ARGS(rtv_heap.put()));
 
         // レンダーターゲットビュー(RTV)の作成.
-        std::vector<ComPtr<ID3D12Resource>> back_buffers(2);
+        std::vector<com_ptr<ID3D12Resource>> back_buffers(2);
         for (int i = 0; i < 2; ++i) {
-            swapchain->GetBuffer(i, IID_PPV_ARGS(&back_buffers[i]));
+            swapchain->GetBuffer(i, IID_PPV_ARGS(back_buffers[i].put()));
 
             D3D12_CPU_DESCRIPTOR_HANDLE rtv_handle{
                 rtv_heap->GetCPUDescriptorHandleForHeapStart()
             };
             rtv_handle.ptr += static_cast<SIZE_T>(i) * device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
-            device->CreateRenderTargetView(back_buffers[i].Get(), nullptr, rtv_handle);
+            device->CreateRenderTargetView(back_buffers[i].get(), nullptr, rtv_handle);
         }
 
 
@@ -193,13 +202,13 @@ int main() {
                 command_list->ClearRenderTargetView(rtv_handle, clear_color.data(), 0, nullptr);
 
                 command_list->Close();
-                const std::array<ID3D12CommandList*, 1> command_lists{command_list.Get()};
+                const std::array<ID3D12CommandList*, 1> command_lists{command_list.get()};
                 command_queue->ExecuteCommandLists(
                     static_cast<UINT>(command_lists.size()), command_lists.data()
                 );
 
                 command_allocator->Reset();
-                command_list->Reset(command_allocator.Get(), nullptr);
+                command_list->Reset(command_allocator.get(), nullptr);
 
                 swapchain->Present(1, 0);
             } else {
@@ -209,6 +218,14 @@ int main() {
         UnregisterClassW(w.lpszClassName, w.hInstance);
 
         return 0;
+    } catch (const winrt::hresult_error& e) {
+        // hresult_errorはstd::exceptionを継承していないため個別に受ける.
+        try {
+            Printer{}.Error("fatal: " + winrt::to_string(e.message()));
+        } catch (...) {  // NOLINT(bugprone-empty-catch)
+            // ログ出力自体の失敗は諦める(best-effort)
+        }
+        return 1;
     } catch (const std::exception& e) {
         try {
             Printer{}.Error("fatal: " + std::string(e.what()));

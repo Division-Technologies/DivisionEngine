@@ -37,8 +37,12 @@ target_link_libraries(main PRIVATE core)
 # Platform-specific graphics backend libraries.
 # Windows: Direct3D 12 / DXGI. Linked here instead of via #pragma comment(lib)
 # in source so that non-Windows builds (macOS/Linux) stay clean.
+#
+# oleaut32/ole32/runtimeobject are required by C++/WinRT (winrt::com_ptr):
+# winrt::hresult_error pulls in GetErrorInfo, SysStringLen/SysFreeString and
+# RoOriginateLanguageException for its error information.
 if(WIN32)
-    target_link_libraries(main PRIVATE d3d12 dxgi)
+    target_link_libraries(main PRIVATE d3d12 dxgi oleaut32 ole32 runtimeobject)
 endif()
 
 
