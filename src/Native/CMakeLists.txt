@@ -41,8 +41,11 @@ target_link_libraries(main PRIVATE core)
 # oleaut32/ole32/runtimeobject are required by C++/WinRT (winrt::com_ptr):
 # winrt::hresult_error pulls in GetErrorInfo, SysStringLen/SysFreeString and
 # RoOriginateLanguageException for its error information.
+#
+# D3D12を呼ぶコードはcore側(graphics_backends/dx12)にあるため、coreに紐付ける。
+# PUBLICにすることでcoreをリンクするmainやテストへ伝播する。
 if(WIN32)
-    target_link_libraries(main PRIVATE d3d12 dxgi oleaut32 ole32 runtimeobject)
+    target_link_libraries(core PUBLIC d3d12 dxgi oleaut32 ole32 runtimeobject)
 endif()
 
 
