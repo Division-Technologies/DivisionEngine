@@ -70,6 +70,30 @@ void raii() {
     - 関数の引数をスマートポインタにするのは、所有権を移す場合や共有する場合に限る
 
 
+## 値メンバとunique_ptrの使い分け
+メンバを値で持つかポインタで持つかは、所有権の強さと柔軟性のトレードオフになる。
+
+| | 値メンバ | `std::unique_ptr` |
+|---|---|---|
+| 排他所有である | ○ | ○ |
+| nullになりうる | × | ○ |
+| 所有権を手放せる | × | ○（`move`・`reset`） |
+| 寿命が親と一致する | 必ず | 通常は一致するが途中で終わらせられる |
+| ヒープ確保 | 不要 | 必要 |
+| 不完全型のまま宣言できる | × | ○ |
+
+所有の表明として強いのは値メンバのほうになる。
+`unique_ptr`は排他所有ではあるが、空にもできるし他所へ移すこともできるため、一段弱い表明になる。
+
+`unique_ptr`が値メンバに勝るのは、その柔軟性か不完全型が実際に必要なときとなる
+- 多態性
+    - 基底へのポインタで持ち実装を差し替える
+- 動的な生成と破棄
+    - 遅延初期化や、実行時の作り直し
+- 前方宣言でヘッダ依存を切りたい（Pimpl）
+- 所有権を関数の外へ移す
+
+
 ## 参照カウントの方式
 非侵入型
 - `shared_ptr`のように、カウンタをオブジェクトの外（制御ブロック）に置く方式
@@ -94,3 +118,4 @@ void raii() {
 - [std::unique_ptr — cppreference](https://en.cppreference.com/w/cpp/memory/unique_ptr)
 - [std::shared_ptr — cppreference](https://en.cppreference.com/w/cpp/memory/shared_ptr)
 - [C++ Core Guidelines: Resource management](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#S-resource)
+- [C++ Core Guidelines: R.5 Prefer scoped objects, don't heap-allocate unnecessarily](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#Rr-scoped)

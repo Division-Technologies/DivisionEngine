@@ -23,9 +23,14 @@ target_sources(core
     PUBLIC
         FILE_SET cxx_modules TYPE CXX_MODULES FILES ${LIB_MODULES}
 )
+
+# INCLUDE_DIR: モジュールやライブラリを置く場所.
+# SOURCE_DIR : 実装と、それに対応するヘッダを置く場所.
+#              mainからも同じ<graphics_backends/...>で辿れるようPUBLICにする.
 target_include_directories(core
-    PUBLIC  ${INCLUDE_DIR}
-    PRIVATE ${SOURCE_DIR}
+    PUBLIC
+        ${INCLUDE_DIR}
+        ${SOURCE_DIR}
 )
 
 # executeable

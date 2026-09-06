@@ -1,4 +1,4 @@
-#include <graphics_backends/dx12/initializer.h>
+#include <graphics_backends/dx12/dx12_initializer.h>
 
 #include <iterator>
 #include <string_view>
@@ -20,7 +20,7 @@ void EnableDebugLayer() {
 
 namespace graphics_backends::dx12 {
 
-void Initializer::Initialize(HWND hwnd) {
+void Dx12Initializer::Initialize(HWND hwnd) {
     EnableDebugLayer();
 
     CreateFactoryAndAdapter();
@@ -31,7 +31,7 @@ void Initializer::Initialize(HWND hwnd) {
     CreateRenderTargetViews();
 }
 
-void Initializer::WaitForGpu() {
+void Dx12Initializer::WaitForGpu() {
     ++fence_value_;
     winrt::check_hresult(command_queue_->Signal(fence_.get(), fence_value_));
 
@@ -45,11 +45,11 @@ void Initializer::WaitForGpu() {
     }
 }
 
-ID3D12Resource* Initializer::CurrentBackBuffer() const {
+ID3D12Resource* Dx12Initializer::CurrentBackBuffer() const {
     return back_buffers_.at(swapchain_->GetCurrentBackBufferIndex()).get();
 }
 
-D3D12_CPU_DESCRIPTOR_HANDLE Initializer::CurrentRenderTargetView() const {
+D3D12_CPU_DESCRIPTOR_HANDLE Dx12Initializer::CurrentRenderTargetView() const {
     D3D12_CPU_DESCRIPTOR_HANDLE handle{
         rtv_heap_->GetCPUDescriptorHandleForHeapStart()
     };
@@ -58,7 +58,7 @@ D3D12_CPU_DESCRIPTOR_HANDLE Initializer::CurrentRenderTargetView() const {
     return handle;
 }
 
-void Initializer::CreateFactoryAndAdapter() {
+void Dx12Initializer::CreateFactoryAndAdapter() {
 #ifdef _DEBUG
     constexpr UINT FACTORY_FLAGS = DXGI_CREATE_FACTORY_DEBUG;
 #else
@@ -80,8 +80,8 @@ void Initializer::CreateFactoryAndAdapter() {
             std::end(desc.Description)
         };
 
-        // NVIDIA製のアダプターがあれば優先して使う.
-        // 見つからなければadapter_はnullptrのままとし、D3D12CreateDeviceの既定選択に委ねる.
+        // NVIDIA製のアダプターがあれば優先して使う
+        // 見つからなければadapter_はnullptrのままとし、D3D12CreateDeviceの既定選択に委ねる
         if (description.find(L"NVIDIA") != std::wstring_view::npos) {
             adapter_ = std::move(adapter);
             break;
@@ -89,13 +89,13 @@ void Initializer::CreateFactoryAndAdapter() {
     }
 }
 
-void Initializer::CreateDevice() {
+void Dx12Initializer::CreateDevice() {
     winrt::check_hresult(D3D12CreateDevice(
         adapter_.get(), D3D_FEATURE_LEVEL_12_1, IID_PPV_ARGS(device_.put())
     ));
 }
 
-void Initializer::CreateCommandObjects() {
+void Dx12Initializer::CreateCommandObjects() {
     winrt::check_hresult(device_->CreateCommandAllocator(
         D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(command_allocator_.put())
     ));
@@ -116,7 +116,7 @@ void Initializer::CreateCommandObjects() {
     );
 }
 
-void Initializer::CreateFence() {
+void Dx12Initializer::CreateFence() {
     winrt::check_hresult(
         device_->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(fence_.put()))
     );
@@ -127,7 +127,7 @@ void Initializer::CreateFence() {
     }
 }
 
-void Initializer::CreateSwapChain(HWND hwnd) {
+void Dx12Initializer::CreateSwapChain(HWND hwnd) {
     RECT client_rect{};
     if (GetClientRect(hwnd, &client_rect) == 0) {
         winrt::throw_last_error();
@@ -157,7 +157,7 @@ void Initializer::CreateSwapChain(HWND hwnd) {
     swapchain_ = swapchain.as<IDXGISwapChain4>();
 }
 
-void Initializer::CreateRenderTargetViews() {
+void Dx12Initializer::CreateRenderTargetViews() {
     D3D12_DESCRIPTOR_HEAP_DESC desc{};
     desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
     desc.NodeMask = 0;

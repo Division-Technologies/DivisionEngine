@@ -6,18 +6,19 @@
 #endif
 
 #include <Windows.h>
-#include <d3d12.h>
-#include <graphics_backends/dx12/initializer.h>
+#include <graphics_backends/backend.h>
+#include <graphics_backends/dx12/dx12_backend.h>
 #include <winrt/base.h>
 
-#include <array>
 #include <exception>
+#include <memory>
 #include <string>
 
 
 import Printer;
 
-using graphics_backends::dx12::Initializer;
+using graphics_backends::Backend;
+namespace dx12 = graphics_backends::dx12;
 
 
 LRESULT WindowProcedure(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
@@ -60,13 +61,11 @@ int main() {
         }
 
         ///
-        //  DirectX 12
+        //  グラフィックスバックエンド
         //
-        Initializer initializer;
-        initializer.Initialize(hwnd);
-
-        auto* command_list = initializer.CommandList();
-        auto* command_allocator = initializer.CommandAllocator();
+        // バックエンドの選択はこの1行に閉じており、以降はBackend越しに扱う.
+        std::unique_ptr<Backend> backend = std::make_unique<dx12::Dx12Backend>();
+        backend->Initialize(hwnd);
 
 
         ShowWindow(hwnd, SW_SHOW);
@@ -80,53 +79,14 @@ int main() {
 
                 TranslateMessage(&msg);  // キーボード入力などを文字コードに変換する.
                 DispatchMessageW(&msg);  // ウィンドウプロシージャにメッセージを送る.
-
-                // バックバッファをPRESENTからRENDER_TARGETへ遷移させる.
-                D3D12_RESOURCE_BARRIER barrier_desc{};
-                barrier_desc.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-                barrier_desc.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-                // Transitionは共用体メンバだが、D3D12のAPI仕様上ここを埋める以外にない.
-                // NOLINTBEGIN(cppcoreguidelines-pro-type-union-access)
-                barrier_desc.Transition.pResource = initializer.CurrentBackBuffer();
-                barrier_desc.Transition.Subresource = 0;
-                barrier_desc.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
-                barrier_desc.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
-                // NOLINTEND(cppcoreguidelines-pro-type-union-access)
-
-                command_list->ResourceBarrier(1, &barrier_desc);
-
-                const auto rtv_handle = initializer.CurrentRenderTargetView();
-                command_list->OMSetRenderTargets(1, &rtv_handle, true, nullptr);
-
-                const std::array<float, 4> clear_color{1.0f, 1.0f, 1.0f, 1.0f};
-                command_list->ClearRenderTargetView(rtv_handle, clear_color.data(), 0, nullptr);
-
-                // Presentできる状態へ戻す.
-                // NOLINTBEGIN(cppcoreguidelines-pro-type-union-access)
-                barrier_desc.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-                barrier_desc.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
-                // NOLINTEND(cppcoreguidelines-pro-type-union-access)
-                command_list->ResourceBarrier(1, &barrier_desc);
-
-                command_list->Close();
-                const std::array<ID3D12CommandList*, 1> command_lists{command_list};
-                initializer.CommandQueue()->ExecuteCommandLists(
-                    static_cast<UINT>(command_lists.size()), command_lists.data()
-                );
-
-                // アロケータを再利用する前にGPUの完了を待つ.
-                initializer.WaitForGpu();
-
-                command_allocator->Reset();
-                command_list->Reset(command_allocator, nullptr);
-
-                initializer.SwapChain()->Present(1, 0);
             } else {
             }
+
+            backend->RenderFrame();
         }
 
         // 破棄に入る前にGPU側の処理を終わらせる.
-        initializer.WaitForGpu();
+        backend->WaitForGpu();
 
         UnregisterClassW(w.lpszClassName, w.hInstance);
 
