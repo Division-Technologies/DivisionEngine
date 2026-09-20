@@ -8,10 +8,10 @@ namespace DivisionEngine.Authoring.Assets;
 ///     types. Keeping the reload on the engine thread avoids mutating the object graph concurrently.
 ///     <para>
 ///         The entity world rides along through a <see cref="WorldReloadParticipant" />, which the
-///         system builds from the frame's engine. Behaviour turns do not survive: they are cancelled,
+///         system builds from the frame's engine. Behavior turns do not survive: they are cancelled,
 ///         and anything that should outlive the reload belongs in a component.
 ///     </para>
-///     Register it in <see cref="PhaseId.FrameBegin" />, where no behaviour runs and no job is in
+///     Register it in <see cref="PhaseId.FrameBegin" />, where no behavior runs and no job is in
 ///     flight.
 /// </summary>
 public sealed class ScriptReloadSystem(AssetDatabase database, ScriptHost host) : ISystem

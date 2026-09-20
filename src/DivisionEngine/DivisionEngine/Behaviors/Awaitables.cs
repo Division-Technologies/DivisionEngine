@@ -6,12 +6,12 @@ namespace DivisionEngine;
 /// </summary>
 public struct EntityAccessBuilder
 {
-    private readonly BehaviourContext _context;
+    private readonly BehaviorContext _context;
     private AccessSetBuilder _builder;
     private Round _readRound;
     private Round _writeRound;
 
-    internal EntityAccessBuilder(BehaviourContext context)
+    internal EntityAccessBuilder(BehaviorContext context)
     {
         _context = context;
         _builder = new AccessSetBuilder();
@@ -56,21 +56,21 @@ public struct EntityAccessBuilder
 ///     Awaiters must carry all their state from construction: the state machine is boxed (copied)
 ///     before OnCompleted runs, so anything assigned there would be lost on the first await.
 /// </summary>
-public readonly struct EntityAccessAwaiter : IBehaviourAwaiter
+public readonly struct EntityAccessAwaiter : IBehaviorAwaiter
 {
     private readonly AccessSet _access;
-    private readonly BehaviourContext _context;
+    private readonly BehaviorContext _context;
     private readonly EntityAccess _handle;
     private readonly Round _readRound;
 
-    internal EntityAccessAwaiter(BehaviourContext context, AccessSet access, Round readRound, Round writeRound)
+    internal EntityAccessAwaiter(BehaviorContext context, AccessSet access, Round readRound, Round writeRound)
     {
         _context = context;
         _access = access;
         _readRound = readRound;
         _handle = new EntityAccess(context, access, readRound, writeRound);
 
-        // Fail inside the async method (a catchable behaviour error) rather than inside the scheduler.
+        // Fail inside the async method (a catchable behavior error) rather than inside the scheduler.
         if (context.InPhase && access.EntityWrites.Length > 0 && context.Graph.ResolveRound(writeRound) < context.CurrentRound)
         {
             throw new InvalidOperationException($"{context} cannot write to round '{writeRound}' after advancing past it.");
@@ -103,7 +103,7 @@ public readonly struct EntityAccessAwaiter : IBehaviourAwaiter
     }
 }
 
-public readonly struct ReadAwaitable<T>(BehaviourContext context, Entity target, Round round) where T : unmanaged
+public readonly struct ReadAwaitable<T>(BehaviorContext context, Entity target, Round round) where T : unmanaged
 {
     public ReadAwaiter<T> GetAwaiter()
     {
@@ -111,7 +111,7 @@ public readonly struct ReadAwaitable<T>(BehaviourContext context, Entity target,
     }
 }
 
-public readonly struct ReadAwaiter<T>(EntityAccessAwaiter inner, Entity target) : IBehaviourAwaiter where T : unmanaged
+public readonly struct ReadAwaiter<T>(EntityAccessAwaiter inner, Entity target) : IBehaviorAwaiter where T : unmanaged
 {
     public bool IsCompleted => false;
 
@@ -131,7 +131,7 @@ public readonly struct ReadAwaiter<T>(EntityAccessAwaiter inner, Entity target) 
     }
 }
 
-public readonly struct TryReadAwaitable<T>(BehaviourContext context, Entity target, Round round) where T : unmanaged
+public readonly struct TryReadAwaitable<T>(BehaviorContext context, Entity target, Round round) where T : unmanaged
 {
     public TryReadAwaiter<T> GetAwaiter()
     {
@@ -139,7 +139,7 @@ public readonly struct TryReadAwaitable<T>(BehaviourContext context, Entity targ
     }
 }
 
-public readonly struct TryReadAwaiter<T>(EntityAccessAwaiter inner, Entity target) : IBehaviourAwaiter where T : unmanaged
+public readonly struct TryReadAwaiter<T>(EntityAccessAwaiter inner, Entity target) : IBehaviorAwaiter where T : unmanaged
 {
     public bool IsCompleted => false;
 
@@ -159,7 +159,7 @@ public readonly struct TryReadAwaiter<T>(EntityAccessAwaiter inner, Entity targe
     }
 }
 
-public readonly struct WriteAwaitable<T>(BehaviourContext context, Entity target, Round round) where T : unmanaged
+public readonly struct WriteAwaitable<T>(BehaviorContext context, Entity target, Round round) where T : unmanaged
 {
     public WriteAwaiter<T> GetAwaiter()
     {
@@ -167,7 +167,7 @@ public readonly struct WriteAwaitable<T>(BehaviourContext context, Entity target
     }
 }
 
-public readonly struct WriteAwaiter<T>(EntityAccessAwaiter inner, Entity target) : IBehaviourAwaiter where T : unmanaged
+public readonly struct WriteAwaiter<T>(EntityAccessAwaiter inner, Entity target) : IBehaviorAwaiter where T : unmanaged
 {
     public bool IsCompleted => false;
 
@@ -197,7 +197,7 @@ public readonly struct ComponentRef<T>(EntityAccess access, Entity entity) where
     public ref T Value => ref access.Ref<T>(entity);
 }
 
-public readonly struct PhaseAwaitable(BehaviourContext context, PhaseId phase)
+public readonly struct PhaseAwaitable(BehaviorContext context, PhaseId phase)
 {
     public PhaseAwaiter GetAwaiter()
     {
@@ -205,7 +205,7 @@ public readonly struct PhaseAwaitable(BehaviourContext context, PhaseId phase)
     }
 }
 
-public readonly struct PhaseAwaiter(BehaviourContext context, PhaseId phase) : IBehaviourAwaiter
+public readonly struct PhaseAwaiter(BehaviorContext context, PhaseId phase) : IBehaviorAwaiter
 {
     public bool IsCompleted => false;
 
@@ -224,7 +224,7 @@ public readonly struct PhaseAwaiter(BehaviourContext context, PhaseId phase) : I
     }
 }
 
-public readonly struct BackgroundAwaitable<T>(BehaviourContext context, Func<T> work)
+public readonly struct BackgroundAwaitable<T>(BehaviorContext context, Func<T> work)
 {
     public BackgroundAwaiter<T> GetAwaiter()
     {
@@ -232,13 +232,13 @@ public readonly struct BackgroundAwaitable<T>(BehaviourContext context, Func<T> 
     }
 }
 
-public readonly struct BackgroundAwaiter<T> : IBehaviourAwaiter
+public readonly struct BackgroundAwaiter<T> : IBehaviorAwaiter
 {
-    private readonly BehaviourContext _context;
+    private readonly BehaviorContext _context;
     private readonly Result _result;
     private readonly Func<T> _work;
 
-    internal BackgroundAwaiter(BehaviourContext context, Func<T> work)
+    internal BackgroundAwaiter(BehaviorContext context, Func<T> work)
     {
         _context = context;
         _work = work;
@@ -251,7 +251,7 @@ public readonly struct BackgroundAwaiter<T> : IBehaviourAwaiter
     {
         if (_result.Error is { } error)
         {
-            throw new BehaviourFailedException(_context.Name, error);
+            throw new BehaviorFailedException(_context.Name, error);
         }
 
         return _result.Value!;

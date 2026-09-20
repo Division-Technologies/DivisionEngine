@@ -1,6 +1,6 @@
 using DivisionEngine.Tests.Entities;
 
-namespace DivisionEngine.Tests.Behaviours;
+namespace DivisionEngine.Tests.Behaviors;
 
 [TestFixture]
 public sealed class RoundTests
@@ -48,15 +48,15 @@ public sealed class RoundTests
         Assert.Fail($"not done after {maxFrames} frames");
     }
 
-    private sealed class Script(Func<BehaviourContext, BehaviourTask> body) : Behaviour
+    private sealed class Script(Func<BehaviorContext, BehaviorTask> body) : Behavior
     {
-        protected override BehaviourTask Run(BehaviourContext context)
+        protected override BehaviorTask Run(BehaviorContext context)
         {
             return body(context);
         }
     }
 
-    private BehaviourContext Start(Func<BehaviourContext, BehaviourTask> body)
+    private BehaviorContext Start(Func<BehaviorContext, BehaviorTask> body)
     {
         return _graph.Start(_world.CreateEntity(), new Script(body));
     }
@@ -90,7 +90,7 @@ public sealed class RoundTests
     public void SameRoundWrites_LastWriterByTurnOrderWins_RegardlessOfTiming()
     {
         var target = _world.CreateEntity(ComponentType<Position>.Id);
-        var contexts = new List<BehaviourContext>();
+        var contexts = new List<BehaviorContext>();
         for (var i = 0; i < 10; i++)
         {
             contexts.Add(Start(async ctx =>
@@ -111,7 +111,7 @@ public sealed class RoundTests
     {
         var target = _world.CreateEntity(ComponentType<Health>.Id);
         _world.SetComponent(target, new Health { Value = 1 });
-        var contexts = new List<BehaviourContext>();
+        var contexts = new List<BehaviorContext>();
         for (var i = 0; i < 8; i++)
         {
             contexts.Add(Start(async ctx =>
@@ -165,13 +165,13 @@ public sealed class RoundTests
         Assert.Multiple(() =>
         {
             Assert.That(seenByHealer, Is.EqualTo(90), "reads the damage round after it closed");
-            Assert.That(seenInitial, Is.EqualTo(100), "initial never sees behaviour writes");
+            Assert.That(seenInitial, Is.EqualTo(100), "initial never sees behavior writes");
             Assert.That(_world.GetComponent<Health>(target).Value, Is.EqualTo(95), "damage then main, committed in order");
         });
     }
 
     [Test]
-    public void WritingToAnEarlierRound_AfterAdvancing_FailsTheBehaviour()
+    public void WritingToAnEarlierRound_AfterAdvancing_FailsTheBehavior()
     {
         var target = _world.CreateEntity(ComponentType<Health>.Id);
         var context = Start(async ctx =>
@@ -187,7 +187,7 @@ public sealed class RoundTests
     }
 
     [Test]
-    public void UnregisteredLabel_FailsTheBehaviour()
+    public void UnregisteredLabel_FailsTheBehavior()
     {
         var target = _world.CreateEntity(ComponentType<Health>.Id);
         var context = Start(async ctx =>
@@ -320,7 +320,7 @@ public sealed class RoundTests
     public void Start_IsIssuedAtTheNextPhase_InTurnOrder()
     {
         var order = new List<int>();
-        var contexts = new List<BehaviourContext>();
+        var contexts = new List<BehaviorContext>();
         for (var i = 0; i < 5; i++)
         {
             contexts.Add(Start(ctx =>

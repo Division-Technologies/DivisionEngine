@@ -4,7 +4,7 @@ using DivisionEngine.Benchmarks.Entities;
 namespace DivisionEngine.Benchmarks.Scheduling;
 
 /// <summary>
-///     Job system baseline (plan M2): per-issue dependency inference and dispatch overhead, and the
+///     Job system baseline: per-issue dependency inference and dispatch overhead, and the
 ///     chunk-parallel speedup of the integrate loop from the entity benchmarks.
 /// </summary>
 [MemoryDiagnoser]

@@ -18,8 +18,8 @@ public struct Health
 }
 
 /// <summary>
-///     Entity storage baseline (plan M1): creation, query iteration and add/remove churn at 100k
-///     entities. Iteration is the number that matters for the scheduler (M2) later.
+///     Entity storage baseline: creation, query iteration and add/remove churn at 100k
+///     entities. Iteration is the number that matters for the scheduler later.
 /// </summary>
 [MemoryDiagnoser]
 public class EntityBenchmarks

@@ -7,7 +7,7 @@ namespace DivisionEngine;
 ///     recomputes the budget.
 ///     Catch-up is capped by <c>maxStepsPerFrame</c>. When more steps are owed than the cap, the
 ///     excess is dropped by moving the simulation origin forward, so simulated time lags real time
-///     instead of jumping (Unity's <c>maximumDeltaTime</c> behaviour). The simulated clock therefore
+///     instead of jumping (Unity's <c>maximumDeltaTime</c> behavior). The simulated clock therefore
 ///     stays continuous across steps.
 /// </summary>
 public struct FixedUpdateTimeProvider : ITimeProvider

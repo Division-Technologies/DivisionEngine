@@ -71,7 +71,7 @@ ID は書き込み・読み込みともに昇順ソートされている前提�
 - 実際のキーの方が**小さい** → 読み手がもう持っていないフィールド（削除された）。値ごと捨てて次のキーへ進む
 - 実際のキーの方が**大きい** → 書き手が持っていなかったフィールド（追加された）。既定値を返し、**読んだキーは次のフィールドのために差し戻す**（1 キーの先読みバッファ）
 
-この差し戻しが要点で、当初の実装は不一致なら無条件にノードを捨てていたため、**中間へのフィールド追加・削除がそれ以降の全フィールドを巻き込んで失わせていた**（末尾への追加だけが安全だった）。ID はフィールド名のハッシュなので、追加したフィールドが末尾に来るかどうかは書き手には制御できず、どの位置でも壊れないことが必須になる。M7b でこれを修正し、`DivisionEngine.Tests/Serialization/SchemaEvolutionTests.cs` が 4 方向（同版・末尾追加・中間追加・中間削除）を固定している。
+この差し戻しが要点で、当初の実装は不一致なら無条件にノードを捨てていたため、**中間へのフィールド追加・削除がそれ以降の全フィールドを巻き込んで失わせていた**（末尾への追加だけが安全だった）。ID はフィールド名のハッシュなので、追加したフィールドが末尾に来るかどうかは書き手には制御できず、どの位置でも壊れないことが必須になる。これを修正し、`DivisionEngine.Tests/Serialization/SchemaEvolutionTests.cs` が 4 方向（同版・末尾追加・中間追加・中間削除）を固定している。
 
 差し戻したキーは `EndStruct` で破棄する。そうしないと、ある struct が読み切らなかったキーが親のフィールドと誤認される。
 
@@ -112,7 +112,7 @@ VYaml ベースの `YamlSerializer` / `YamlDeserializer`。キーはIDの文字�
 
 オブジェクトのフレーミングに書く型識別子は GUID の**安定型ID**（`SerializedTypeId.Get`、"N" 形式 32 桁 hex）。既定は `Type.FullName`（アセンブリ名は含めない。含めるとホットリロードで再コンパイルされたユーザーアセンブリと一致しなくなるため）の MD5 ハッシュ。
 
-クラス名や名前空間を変更したい場合は、変更前に `[TypeId("<GUID>")]` で現在の ID を固定すれば、ソース上に旧名を残さず既存データを壊さずにリネームできる。`[TypeId]` は M7a で struct にも適用できるようにした（保存されたシーンがコンポーネント struct をこの ID で参照するため。[シーン・エンティティ管理](EntityManagementPlan.md)の M7a を参照）。ただし `[SerializedTypeRegistration]` の生成と `DIVSER005` はクラス限定のままで、struct の ID は実行時の `SerializedTypeId.Get` と `ComponentTypeRegistry` の逆引きが使う。アナライザ `DIVSER005`（Info）が ID 未固定のシリアライズ対象クラスを検出し、付属の CodeFix（`DivisionEngine.Generators.CodeFixes`）が現在の名前から計算した GUID の `[TypeId]` を自動挿入する。一度付与した ID は変更しない。
+クラス名や名前空間を変更したい場合は、変更前に `[TypeId("<GUID>")]` で現在の ID を固定すれば、ソース上に旧名を残さず既存データを壊さずにリネームできる。`[TypeId]` は struct にも適用できる（保存されたシーンがコンポーネント struct をこの ID で参照するため。[SceneManagement.md](./SceneManagement.md) を参照）。ただし `[SerializedTypeRegistration]` の生成と `DIVSER005` はクラス限定のままで、struct の ID は実行時の `SerializedTypeId.Get` と `ComponentTypeRegistry` の逆引きが使う。アナライザ `DIVSER005`（Info）が ID 未固定のシリアライズ対象クラスを検出し、付属の CodeFix（`DivisionEngine.Generators.CodeFixes`）が現在の名前から計算した GUID の `[TypeId]` を自動挿入する。一度付与した ID は変更しない。
 
 ハッシュは型名へ逆引きできないため、Source Generator が `ISerializable` を実装する（または `[AutoSerialization]`/`[TypeId]` の付いた）非ジェネリックな全クラスについてアセンブリ属性 `[SerializedTypeRegistration(id, type)]` を生成し、これが ID → 型解決の情報源になる。アセンブリ内の ID 重複はコンパイルエラー（`DIVSER003`）、GUID として不正な ID やジェネリック型への `[TypeId]` もエラー（`DIVSER004`）。ID の既定値計算は Generator（`SerializedTypeGuid`）とランタイム（`SerializedTypeId`）で一致している必要がある。
 
@@ -189,4 +189,4 @@ public interface ISerializationScopeLoader : IDisposable
 
 これを担うのは `AssetDatabase.ReloadScripts` ただ一つで、ライブオブジェクトグラフを所有しているのが `AssetDatabase` のため。詳細は[スクリプティング](Scripting.md#コードのリロード)を参照。
 
-かつてコア側にも `ObjectManager.ReloadClasses` と、それが使う `SerializationScope` のコピーコンストラクタ・`Transfer` という同じ発想の実装があったが、呼び出し元がないまま複数のバグ（collectible ALC の型を解決できない、バッファを使い回して 2 件目以降が壊れる、オブジェクトのフレーミング欠如、pass 2 の未実行）を抱えていたため M7a で削除した。リロード経路を増やす場合は `AssetDatabase.ReloadScripts` から分岐させる。
+かつてコア側にも `ObjectManager.ReloadClasses` と、それが使う `SerializationScope` のコピーコンストラクタ・`Transfer` という同じ発想の実装があったが、呼び出し元がないまま複数のバグ（collectible ALC の型を解決できない、バッファを使い回して 2 件目以降が壊れる、オブジェクトのフレーミング欠如、pass 2 の未実行）を抱えていたため削除した。リロード経路を増やす場合は `AssetDatabase.ReloadScripts` から分岐させる。

@@ -1,22 +1,22 @@
 namespace DivisionEngine;
 
 /// <summary>
-///     Starts a turn for every <see cref="Behaviour" /> component that does not have one running.
+///     Starts a turn for every <see cref="Behavior" /> component that does not have one running.
 ///     <para>
-///         This is what makes a behaviour survive things that its own suspended state cannot. A turn
+///         This is what makes a behavior survive things that its own suspended state cannot. A turn
 ///         lives in a compiler-generated state machine, which no scene file can hold and no assembly
-///         swap can carry; what persists instead is the behaviour <em>component</em>, and this system
+///         swap can carry; what persists instead is the behavior <em>component</em>, and this system
 ///         turns that back into a running turn. Loading a scene, instantiating a prefab, reloading
-///         user scripts and simply adding a behaviour to an entity all arrive here by the same path.
+///         user scripts and simply adding a behavior to an entity all arrive here by the same path.
 ///     </para>
 ///     <para>
-///         Idempotent by construction: a behaviour whose turn is still alive is skipped, so running it
-///         every frame costs one pass over the archetypes that hold behaviours.
+///         Idempotent by construction: a behavior whose turn is still alive is skipped, so running it
+///         every frame costs one pass over the archetypes that hold behaviors.
 ///     </para>
 /// </summary>
-public sealed class BehaviourStartSystem : ISystem
+public sealed class BehaviorStartSystem : ISystem
 {
-    private readonly List<(Entity Entity, Behaviour Behaviour)> _pending = new();
+    private readonly List<(Entity Entity, Behavior Behavior)> _pending = new();
 
     public void Execute(ref FrameContext ctx)
     {
@@ -27,7 +27,7 @@ public sealed class BehaviourStartSystem : ISystem
         {
             foreach (var type in archetype.Types)
             {
-                if (!ComponentTypeRegistry.GetInfo(type).IsBehaviour)
+                if (!ComponentTypeRegistry.GetInfo(type).IsBehavior)
                 {
                     continue;
                 }
@@ -39,9 +39,9 @@ public sealed class BehaviourStartSystem : ISystem
                     var entities = chunk.Entities;
                     for (var i = 0; i < chunk.Count; i++)
                     {
-                        if (instances[i] is Behaviour { IsRunning: false } behaviour)
+                        if (instances[i] is Behavior { IsRunning: false } behavior)
                         {
-                            _pending.Add((entities[i], behaviour));
+                            _pending.Add((entities[i], behavior));
                         }
                     }
                 }
@@ -51,9 +51,9 @@ public sealed class BehaviourStartSystem : ISystem
         // Turn ids are assigned in start order and decide who commits first, so the order has to come
         // from the world's contents rather than from how its chunks happen to be laid out.
         _pending.Sort(static (a, b) => a.Entity.Index.CompareTo(b.Entity.Index));
-        foreach (var (entity, behaviour) in _pending)
+        foreach (var (entity, behavior) in _pending)
         {
-            ctx.Graph.Start(entity, behaviour);
+            ctx.Graph.Start(entity, behavior);
         }
 
         _pending.Clear();

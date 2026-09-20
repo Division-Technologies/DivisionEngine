@@ -4,7 +4,7 @@
 
 ## 要件
 
-- **統一ワーカープール**: System レーンのジョブと Behaviour レーンのターン（セグメント）を同一のプール・スケジューラに乗せる。プールを分けるとコア数の取り合いとレイテンシ注入が起きるため分けない
+- **統一ワーカープール**: System レーンのジョブと Behavior レーンのターン（セグメント）を同一のプール・スケジューラに乗せる。プールを分けるとコア数の取り合いとレイテンシ注入が起きるため分けない
 - **非ブロッキング**: 待機はすべて「継続をキューに積んでワーカースレッドを手放す」形で実現し、ワーカースレッドを OS レベルでブロックしない
 - **決定性**: 実行結果がスレッドのタイミングに依存しない。決定性は「入力列に対する決定性」として定義し、外部入力の取り込みは [LoopSystem.md](./LoopSystem.md) で規律する
 - **並列化を既定に**: ユーザーが何も指定しないパスが最も並列に走るようにする
@@ -28,10 +28,10 @@
 
 | 資源 | 粒度 | 主な利用者 |
 |---|---|---|
-| コンポーネント | エンティティ×型。型レベルの集約ノードの下にエンティティレベルの疎エントリをぶら下げる多粒度構造 | System（型レベル）、Behaviour（エンティティレベル） |
-| キュー | メールボックス、イベントストリーム等 | Behaviour 間メッセージ、イベント配信 |
+| コンポーネント | エンティティ×型。型レベルの集約ノードの下にエンティティレベルの疎エントリをぶら下げる多粒度構造 | System（型レベル）、Behavior（エンティティレベル） |
+| キュー | メールボックス、イベントストリーム等 | Behavior 間メッセージ、イベント配信 |
 | ワールド構造 | ワールド全体で 1 資源（将来アーキタイプ単位に細分化の余地） | 構造変更（コンポーネント追加/削除、エンティティ生成/破棄） |
-| フェーズ | タイミング用 awaitable（[LoopSystem.md](./LoopSystem.md)） | Behaviour の再開点 |
+| フェーズ | タイミング用 awaitable（[LoopSystem.md](./LoopSystem.md)） | Behavior の再開点 |
 
 対象は unmanaged コンポーネントのみ。managed コンポーネントはエンティティのターン専有（常に排他）で保護されるため、この機構の対象外（[SceneManagement.md](./SceneManagement.md) のレーン境界の規律を参照）。
 
@@ -43,14 +43,14 @@
 
 ### 2 種類の発行
 
-| | System レーン | Behaviour レーン |
+| | System レーン | Behavior レーン |
 |---|---|---|
 | 発行 | 静的（フェーズごとのプログラム順） | 動的（`await` ごとにセグメントを切って発行） |
 | アクセス宣言 | 型レベル、コード上の宣言 | エンティティレベル、`await` の引数 |
 | 書き込み | インプレース（writer 集合が静的に分かるためグラフ辺で十分） | バッファし、ラウンド確定時にキー順コミット |
 | 発行順の決定性 | 自明 | ラウンド機構で確保（後述） |
 
-Behaviour のセグメントとは、`async` メソッドを `await` で区切った区間。`await other.ReadAsync<T>()` は「現在のセグメントを終了し、アクセス集合 `{other: T read}` を宣言した次のセグメントを発行する」操作であり、動的ロックは動的なタスク発行として実現される。セグメントの実行中にアクセス先を増やすことはできず、Analyzer で担保する。
+Behavior のセグメントとは、`async` メソッドを `await` で区切った区間。`await other.ReadAsync<T>()` は「現在のセグメントを終了し、アクセス集合 `{other: T read}` を宣言した次のセグメントを発行する」操作であり、動的ロックは動的なタスク発行として実現される。セグメントの実行中にアクセス先を増やすことはできず、Analyzer で担保する。
 
 turn-based concurrency（同一エンティティのセグメントは直列、異なるエンティティは並列）は Microsoft Orleans の grain と同じモデル。
 
@@ -77,21 +77,21 @@ read は特定のラウンドを要求する。**既定は `initial`**。write �
 
 ### 既定パスは何も待たない
 
-`initial` の read はフェーズ開始時の状態を読むだけなので、writer を待たず、writer を止めない。ラベル付き read と `completed` read だけが依存辺を作る。したがって「read は initial、write は main」だけで書かれた Behaviour は自分のターン以外を何も待たず、これが最も並列に走るパスになる。ユーザーはラウンドを意識せずに済む。
+`initial` の read はフェーズ開始時の状態を読むだけなので、writer を待たず、writer を止めない。ラベル付き read と `completed` read だけが依存辺を作る。したがって「read は initial、write は main」だけで書かれた Behavior は自分のターン以外を何も待たず、これが最も並列に走るパスになる。ユーザーはラウンドを意識せずに済む。
 
 ### 成立条件
 
 1. **ラウンドはフェーズ内で全順序**。ラベルの順序（`initial < damage < heal < main < completed` 等）はフェーズごとに静的に登録する。順序がないと「`damage` の read は `heal` の write を待つべきか」が決まらない
 2. **セグメントは自分の現在ラウンドより前のラウンドしか読めない**。ラウンド k 以降の read を要求した時点で、そのターンは k 以前への write 権を放棄する（ラウンドを前進する）。これにより依存辺は常にラウンド順序の逆方向にしか張られず、グラフは構築時点で非循環になる。**デッドロックは原理的に起きない**
 3. **ラウンドの確定条件**は (a) そのラウンドへの新規発行がもう起きない（ラウンドに居るセグメントが全員離れた = 発行の静止、ラウンド単位でグローバル）かつ (b) その資源への当該ラウンドの write を宣言したタスクが全部完了した（資源単位）。write は発行時にアクセス先を宣言しているのでこれが計算できる
-4. **同一ラウンド・同一資源への複数 write は決定的キー `(ターン ID, ターン内シーケンス)` で順序付け**る。発行タイミングに依存させないため、Behaviour の write はバッファし、ラウンド確定時にキー順でコミットする。セグメント内の read-your-own-write はローカルオーバーレイで見せる
+4. **同一ラウンド・同一資源への複数 write は決定的キー `(ターン ID, ターン内シーケンス)` で順序付け**る。発行タイミングに依存させないため、Behavior の write はバッファし、ラウンド確定時にキー順でコミットする。セグメント内の read-your-own-write はローカルオーバーレイで見せる
 5. **`initial` を後から読めるようにスナップショットを保持する**。動的発行では「write が実行された後に `initial` の read が発行される」ことが普通に起きる。フェーズ内で最初に write されるチャンクをコピーしておく（copy-on-first-write）
 
 ### 境界ケース
 
 - **`completed` を読んだ後の write**: 矛盾なので、`completed` read はそのフェーズの write 権放棄と定義し、以降の write は次フェーズに繰り越す（条件 2 の特殊ケース）
 - **ストラグラー**: ラウンド k に長い計算を持つセグメントがいると k の確定が遅れ、k 以降を読む全員が待つ。ただし既定パス（`initial` read）は無影響。影響範囲は「ラベル付き read を使ったターン」に限定される
-- **System レーンとの合流**: System の write もラウンドに所属する（既定は `main`）。Behaviour が `initial` を読むと System 書き込み前の値、System の書き込み後を読みたければその write のラベルを要求する
+- **System レーンとの合流**: System の write もラウンドに所属する（既定は `main`）。Behavior が `initial` を読むと System 書き込み前の値、System の書き込み後を読みたければその write のラベルを要求する
 - **同一ラベルへの複数 writer**: 条件 4 のキー順で解決する。ラベルは「write の集合」であり、その read は集合内の全 write を待つ
 
 ### スナップショットの扱い
@@ -115,9 +115,9 @@ read は特定のラウンドを要求する。**既定は `initial`**。write �
 
 コンポーネント追加/削除・エンティティ生成/破棄は「ワールド構造」資源への write。ほぼ全タスクと競合するため巨大な競合集合を持ち、自然にフェーズ境界の同期点になる。同期点を特別扱いのバリアとしてではなく、ただのタスクとしてグラフに載せる点が要点。粒度は「ワールド全体で 1 資源」から始める。
 
-## 実装メモ（M2 時点）
+## 実装メモ: System レーン
 
-実装計画 M2 で System レーンを実装した（`DivisionEngine/Scheduling/`）。設計との対応と、実装して分かったこと:
+System レーンは `DivisionEngine/Scheduling/` に実装した。設計との対応と、実装して分かったこと:
 
 - 資源 id は「0 = 構造、正 = コンポーネント型、負 = 名前付き / インスタンス固有」の 1 つの整数に符号化した。コンポーネントアクセスは構造の read を暗黙に含み、構造の write（構造変更、従来型の即時 System）は全エンティティアクセスと競合する。**名前付き資源は構造と独立**なので、構造 write だけでは順序付けされない。コマンドバッファには固有の資源 id を持たせ、記録側は write、playback 側は「構造 write + バッファ write」を宣言する。この宣言が抜けていた版は逐次オラクルが 1 回目で検出した
 - チャンク並列ジョブのチャンク集合は**ノードが ready になった時点**でスナップショットする。発行時にスナップショットすると、依存先の構造変更（playback）が追加したチャンクが見えない
@@ -125,42 +125,42 @@ read は特定のラウンドを要求する。**既定は `initial`**。write �
 - 安全機構はワーカーごとのスレッド静的な「実行中の AccessSet」で実現し、アクセサ側で照合する。コストは小さな sorted 配列の二分探索
 - 例外はノードに記録してスケジューラに報告し、次の `Wait` / `WaitAll` で `JobFailedException` として再スローする。ワーカーは止まらない
 
-## 実装メモ（M3 時点）
+## 実装メモ: Behavior レーン
 
-実装計画 M3 で Behaviour レーンを実装した（`DivisionEngine/Behaviours/`、トラッカーとグラフの拡張は `Scheduling/`）。
+Behavior レーンは `DivisionEngine/Behaviors/` に実装した（トラッカーとグラフの拡張は `Scheduling/`）。
 
-- **ターンの単位は Behaviour インスタンス**（= 1 本の async メソッド）。1 エンティティに複数の Behaviour を付ければそれぞれ独立したターンになる。同一 Behaviour のセグメントは「前セグメントが次を発行する」構造上重ならないが、念のため次セグメントは前セグメントのノードに明示的に依存させている
-- **カスタム AsyncMethodBuilder の本当の役割**は「外部 await の迂回」だった。エンジン自身の awaitable は `UnsafeOnCompleted` で自分でセグメントを発行できるので、ビルダーは `IBehaviourAwaiter` 以外の awaiter（`Task` 等）の継続を取り込みキュー行きに差し替えるだけでよい。ステートマシンのプール化はまだしていない（M9）
+- **ターンの単位は Behavior インスタンス**（= 1 本の async メソッド）。1 エンティティに複数の Behavior を付ければそれぞれ独立したターンになる。同一 Behavior のセグメントは「前セグメントが次を発行する」構造上重ならないが、念のため次セグメントは前セグメントのノードに明示的に依存させている
+- **カスタム AsyncMethodBuilder の本当の役割**は「外部 await の迂回」だった。エンジン自身の awaitable は `UnsafeOnCompleted` で自分でセグメントを発行できるので、ビルダーは `IBehaviorAwaiter` 以外の awaiter（`Task` 等）の継続を取り込みキュー行きに差し替えるだけでよい。ステートマシンのプール化はまだしていない
 - **awaiter の状態は構築時に持たせる**。最初の await でステートマシンがボックス化（コピー）されるのは `OnCompleted` 呼び出しの前なので、`OnCompleted` の中で awaiter 自身に書いた状態はコピー側に残らない。アクセスハンドルや結果ボックスは `GetAwaiter()` の時点で確保する。標準の awaiter が `OnCompleted` で自身を変更しないのと同じ理由
 - **多粒度トラッカー**は型ノードに `EntityWriters`（IX）/ `EntityReaders`（IS）を追加し、エンティティ×型の疎エントリは型の write 世代（epoch）で失効させる。型 write は全リストをクリアし epoch を進める。エンティティ read は型の最終 writer とエンティティの最終 writer に、エンティティ write はさらに型 reader とエンティティ reader に依存する
 - **動的発行は発行ロックで直列化**し、ワーカーからの発行を許可した。フレームを閉じる（`EndFrame`）間に発行されたセグメントは次フレームの取り込みへ繰り延べる。これによりフェーズ await を含まない読みの連鎖でもフレームが有界になる（1 フレームに 1 ホップ以上は進む）
 - **セグメントの実行前にエンティティの生存を確認**し、破棄されていればターンをキャンセルする（async メソッドは放置され、完了しない）。相手エンティティの消失は `Read` が `EntityNotAliveException` を投げ、`TryRead` が null を返す
-- **アクセスハンドル（`EntityAccess`）**はセグメント終了で無効化する。セグメント内の宣言外アクセスと、終了後のハンドル使用はどちらも Behaviour の失敗として `JobFailedException` → `BehaviourFailedException` の連鎖で `WaitAll` に浮上する
-- **フェーズ再開は TurnId 順に発行**する。実行は並列なので観測順は不定（0 ワーカーなら発行順 = 実行順）。決定性そのものは M4 のラウンドで扱う
-- 外部 await と `RunBackground` の完了は取り込みキューに積まれ、`DrainIntake`（Engine.RunFrame の冒頭、M5 で FrameBegin へ移動）で TurnId 順に発行される
+- **アクセスハンドル（`EntityAccess`）**はセグメント終了で無効化する。セグメント内の宣言外アクセスと、終了後のハンドル使用はどちらも Behavior の失敗として `JobFailedException` → `BehaviorFailedException` の連鎖で `WaitAll` に浮上する
+- **フェーズ再開は TurnId 順に発行**する。実行は並列なので観測順は不定（0 ワーカーなら発行順 = 実行順）。決定性そのものはラウンドで扱う
+- 外部 await と `RunBackground` の完了は取り込みキューに積まれ、フレーム冒頭の `AdmitExternal` で TurnId 順に発行される
 
-## 実装メモ（M4 時点）
+## 実装メモ: ラウンド
 
-実装計画 M4 でラウンドを実装した（`Behaviours/Round.cs`、`JobGraph` のフェーズ / ラウンド / コミット）。設計からの主な確定・変更点:
+ラウンドは `Behaviors/Round.cs` と `JobGraph`（フェーズ / ラウンド / コミット）に実装した。設計からの主な確定・変更点:
 
-- **`initial` の定義を「そのフェーズの System 適用後、Behaviour コミット前」に確定した**。System ジョブはフェーズ冒頭で静的に発行され、Behaviour の再開はその後（`BeginPhase` → System の発行 → `ResumePhase` → `EndPhase`）なので、トラッカーがエンティティ read を型 write の後に並べる。Behaviour の write はすべてバッファされフェーズ末にコミットされるため、フェーズ中のインプレースデータは Behaviour からは不変に見える。この結果、設計で検討していた `[Snapshot]`（copy-on-first-write）は**不要**になった
+- **`initial` の定義を「そのフェーズの System 適用後、Behavior コミット前」に確定した**。System ジョブはフェーズ冒頭で静的に発行され、Behavior の再開はその後（`BeginPhase` → System の発行 → `ResumePhase` → `EndPhase`）なので、トラッカーがエンティティ read を型 write の後に並べる。Behavior の write はすべてバッファされフェーズ末にコミットされるため、フェーズ中のインプレースデータは Behavior からは不変に見える。この結果、設計で検討していた `[Snapshot]`（copy-on-first-write）は**不要**になった
 - **累積更新は `Modify<T>(e, f, round)`**。`Write` は last-writer-wins（キー順）なので、read-modify-write を複数ターンから行うと最後の書き手だけが残る。`Modify` はコミット時にその時点の値へ関数を適用するもので、キー順に適用されるため非可換な更新も決定的になる。関数は純粋でなければならない（コミット時とオーバーレイ読み取り時の両方で呼ばれる）
 - **ラベル付き read はゲートノードで待つ**。ラウンド k のゲートは「エントリが閉じている」かつ「ラウンド ≤ k に居るターンが 0」で開く。エントリはそのフェーズの `ResumePhase` 完了時に閉じ、それ以降に開始・再開されるターンは次フェーズへ送られる（閉じたラウンドへの書き込みを構造的に防ぐ）
 - **ラベル付き read の値は閉じたラウンドのバッファをキー順に重ねて計算する**（インプレースはフェーズ中不変なので MVCC の層はバッファそのもの）。`completed` の read はフェーズ末まで待ち、次フェーズの `initial` 読みとして再発行される
 - **ターンのラウンド前進は発行時に行う**。write ハンドル付きセグメントの発行はその write ラウンドへ、ラウンド k の read は k+1 へ前進させる。read だけのセグメントは前進しない（後で任意のラウンドに書ける余地を残す）。`Modify` は前進させない（同一セグメント内の別ラウンドのバッファがまだ可変なため）
-- **`Start` は常に次の `BeginPhase` で TurnId 順に発行される**。以前の「フェーズ外なら即時」は、0 ワーカーでは次の `WaitAll` まで走らないため、Behaviour が動き始めるフレームがワーカー数に依存していた。決定性ハーネスが最初に検出した非決定性がこれ
+- **`Start` は常に次の `BeginPhase` で TurnId 順に発行される**。以前の「フェーズ外なら即時」は、0 ワーカーでは次の `WaitAll` まで走らないため、Behavior が動き始めるフレームがワーカー数に依存していた。決定性ハーネスが最初に検出した非決定性がこれ
 - **`ResumePhase` は `BeginPhase` 時点の待機リストのスナップショットを再開する**。フェーズ中に待機したターン（取り込みから発行された最初のセグメントなど）は次回に回す。セグメントの実行速度に結果が依存しないようにするため
 - **フェーズの有界性はターンごとのセグメント数上限（`MaxSegmentsPerPhase`、既定 256）で担保する**。当初の「`EndPhase` 中の発行は繰り延べ」だけだと、エンジンループでは `ResumePhase` 直後に `EndPhase` が来るため、再開セグメントの次ホップが常に次フェーズへ回ってしまった。上限は回数ベースなので決定的
-- 決定性ハーネス（`DeterminismTests.BehaviourScenario`）: 攻撃者が `damage` ラウンドに `Modify`、回復者が `damage` を読んで `main` に `Modify` し、共有エンティティへ `Write`（last-writer-wins）、System が位置を積分する。ワーカー数 0/1/3/7 × ジッタ有無 × 2 回でハッシュ一致
+- 決定性ハーネス（`DeterminismTests.BehaviorScenario`）: 攻撃者が `damage` ラウンドに `Modify`、回復者が `damage` を読んで `main` に `Modify` し、共有エンティティへ `Write`（last-writer-wins）、System が位置を積分する。ワーカー数 0/1/3/7 × ジッタ有無 × 2 回でハッシュ一致
 
 ## API スケッチ
 
-M3 時点の実装済み API（ラウンド引数は M4 で追加する）:
+実装済みの API:
 
 ```csharp
-public sealed class Chaser : Behaviour
+public sealed class Chaser : Behavior
 {
-    protected override async BehaviourTask Run(BehaviourContext ctx)
+    protected override async BehaviorTask Run(BehaviorContext ctx)
     {
         while (true)
         {
@@ -185,7 +185,7 @@ public sealed class Chaser : Behaviour
 }
 ```
 
-M4 で追加したラウンド API:
+ラウンド API:
 
 ```csharp
 graph.RegisterRounds(PhaseId.Update, "damage");                      // フェーズごとのラベル列（initial < damage < main < completed）
@@ -210,7 +210,7 @@ DivisionEngine.Generators を活かし、規約を文書ではなく診断で強
 - セグメント実行中に宣言外の資源へアクセスするコード（`await` を挟まずに別エンティティのコンポーネントへ触る）を検出する
 - 条件 2 違反（自分の現在ラウンド以降を read しつつ同フェーズで write を続ける）を静的に検出できる範囲で検出する
 - フェーズごとの書き込み可能型（[LoopSystem.md](./LoopSystem.md)）に反する write の警告
-- Behaviour メソッドへの専用 AsyncMethodBuilder 注入（下記）
+- Behavior メソッドへの専用 AsyncMethodBuilder 注入（下記）
 
 ## async ステートマシンのコスト
 

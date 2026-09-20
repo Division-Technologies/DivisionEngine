@@ -87,9 +87,9 @@ public sealed class StructuralChangeTests
         });
     }
 
-    private sealed class Spawner(int count) : Behaviour
+    private sealed class Spawner(int count) : Behavior
     {
-        protected override async BehaviourTask Run(BehaviourContext context)
+        protected override async BehaviorTask Run(BehaviorContext context)
         {
             await context.Phase(PhaseId.Update);
             for (var i = 0; i < count; i++)
@@ -107,7 +107,7 @@ public sealed class StructuralChangeTests
     }
 
     [Test]
-    public void ABehaviourCanRecordStructuralChanges()
+    public void ABehaviorCanRecordStructuralChanges()
     {
         var host = _engine.World.CreateEntity();
         _engine.Graph.Start(host, new Spawner(2));
@@ -119,7 +119,7 @@ public sealed class StructuralChangeTests
     }
 
     [Test]
-    public void SeveralBehavioursApply_InTurnOrder_NotInSegmentOrder()
+    public void SeveralBehaviorsApply_InTurnOrder_NotInSegmentOrder()
     {
         // Three turns each spawn one entity stamped with their turn id. Turn ids ascend with start
         // order, so the health values must come out ascending however the segments were scheduled.
@@ -142,9 +142,9 @@ public sealed class StructuralChangeTests
         Assert.That(stamps, Is.EqualTo(new[] { first.TurnId, second.TurnId, third.TurnId }));
     }
 
-    private sealed class SpawnThenLook(Entity report) : Behaviour
+    private sealed class SpawnThenLook(Entity report) : Behavior
     {
-        protected override async BehaviourTask Run(BehaviourContext context)
+        protected override async BehaviorTask Run(BehaviorContext context)
         {
             await context.Phase(PhaseId.Update);
             context.Commands.CreateEntity();
@@ -179,7 +179,7 @@ public sealed class StructuralChangeTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(before, Is.EqualTo(2), "the report entity and the behaviour's own host, and nothing else yet");
+            Assert.That(before, Is.EqualTo(2), "the report entity and the behavior's own host, and nothing else yet");
             Assert.That(after, Is.EqualTo(3), "the recorded entity has arrived by the next phase");
         });
     }

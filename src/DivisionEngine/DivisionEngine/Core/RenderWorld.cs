@@ -3,8 +3,8 @@ namespace DivisionEngine;
 /// <summary>
 ///     What the renderer sees: a retained mirror of render-relevant state, filled during the
 ///     Extract phase and read during Render. Simulation data is never read by the renderer directly
-///     (Notes/Core/SceneManagement.md, "全 Renderer クエリの実装実態"). Placeholder until the
-///     graphics milestone: it only carries the frame index so the handoff point exists.
+///     (Notes/Core/SceneManagement.md, "全 Renderer クエリの実装実態"). A placeholder until there
+///     is a renderer: it only carries the frame index so the handoff point exists.
 /// </summary>
 public sealed class RenderWorld
 {

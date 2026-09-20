@@ -5,17 +5,17 @@ namespace DivisionEngine.Tests.Core;
 
 /// <summary>
 ///     Recording the clock samples and the external completions admitted per frame, then feeding
-///     them back, must reproduce a run whose behaviours await real timers.
+///     them back, must reproduce a run whose behaviors await real timers.
 /// </summary>
 [TestFixture]
 public sealed class ReplayTests
 {
     private const int Frames = 40;
-    private const int Behaviours = 24;
+    private const int Behaviors = 24;
 
-    private sealed class TimerDriven(Entity shared, Entity own) : Behaviour
+    private sealed class TimerDriven(Entity shared, Entity own) : Behavior
     {
-        protected override async BehaviourTask Run(BehaviourContext context)
+        protected override async BehaviorTask Run(BehaviorContext context)
         {
             while (true)
             {
@@ -37,8 +37,8 @@ public sealed class ReplayTests
         var engine = new Engine(NullLogger.Instance, new JobScheduler(3));
         var shared = engine.World.CreateEntity(ComponentType<Health>.Id);
         engine.World.SetComponent(shared, new Health { Value = 1 });
-        var owns = new Entity[Behaviours];
-        for (var i = 0; i < Behaviours; i++)
+        var owns = new Entity[Behaviors];
+        for (var i = 0; i < Behaviors; i++)
         {
             owns[i] = engine.World.CreateEntity(ComponentType<Position>.Id);
             engine.Graph.Start(owns[i], new TimerDriven(shared, owns[i]));
@@ -91,7 +91,7 @@ public sealed class ReplayTests
         {
             Assert.That(log.Count, Is.EqualTo(Frames));
             Assert.That(log.Frames.Sum(f => f.Externals.Length), Is.GreaterThan(0), "timers completed during the run");
-            Assert.That(sharedValue, Is.Not.EqualTo(1), "behaviours acted");
+            Assert.That(sharedValue, Is.Not.EqualTo(1), "behaviors acted");
         });
 
         // A different run without the log almost certainly differs (timers) — not asserted, timing-dependent.

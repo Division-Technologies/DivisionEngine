@@ -74,7 +74,7 @@ public sealed class FieldTypeChangeTests
     {
         var bytes = Write(new FloatHolder { Value = 2.5f, After = 3 });
 
-        // Pinning the behaviour, not endorsing it: what matters is that it is loud, not silent.
+        // Pinning the behavior, not endorsing it: what matters is that it is loud, not silent.
         Assert.That(() => Read<IntHolder>(bytes), Throws.Exception);
     }
 

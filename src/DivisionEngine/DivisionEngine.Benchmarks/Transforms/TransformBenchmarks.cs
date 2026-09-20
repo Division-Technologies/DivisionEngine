@@ -4,7 +4,7 @@ using BenchmarkDotNet.Attributes;
 namespace DivisionEngine.Benchmarks.Transforms;
 
 /// <summary>
-///     Transform propagation (plan M6) over 100k entities, comparing a flat world (all roots, so pure
+///     Transform propagation over 100k entities, comparing a flat world (all roots, so pure
 ///     chunk iteration) with a hierarchy of the same size (roots walked chunk-parallel, subtrees
 ///     descended by chasing the sibling links). The gap between the two is what the hierarchy costs.
 ///     <see cref="Roots" /> is varied because the work is split over roots: a forest of many small

@@ -3,22 +3,22 @@ using System.Runtime.CompilerServices;
 namespace DivisionEngine;
 
 /// <summary>
-///     Return type of a behaviour's <see cref="Behaviour.Run" />. The method is compiled with
-///     <see cref="BehaviourTaskMethodBuilder" />, which routes every continuation through the job
+///     Return type of a behavior's <see cref="Behavior.Run" />. The method is compiled with
+///     <see cref="BehaviorTaskMethodBuilder" />, which routes every continuation through the job
 ///     graph: awaits on the engine's own awaitables issue the next segment directly, and awaits on
 ///     anything else (Task, ValueTask, ...) resume through the frame's intake queue.
 /// </summary>
-[AsyncMethodBuilder(typeof(BehaviourTaskMethodBuilder))]
-public readonly struct BehaviourTask
+[AsyncMethodBuilder(typeof(BehaviorTaskMethodBuilder))]
+public readonly struct BehaviorTask
 {
-    private readonly BehaviourRun? _run;
+    private readonly BehaviorRun? _run;
 
-    internal BehaviourTask(BehaviourRun run)
+    internal BehaviorTask(BehaviorRun run)
     {
         _run = run;
     }
 
-    /// <summary>False until the behaviour has started (its first segment ran) and finished.</summary>
+    /// <summary>False until the behavior has started (its first segment ran) and finished.</summary>
     public bool IsCompleted => _run?.IsCompleted ?? false;
 
     public bool IsStarted => _run is not null;
@@ -29,7 +29,7 @@ public readonly struct BehaviourTask
 }
 
 /// <summary>Completion state shared between the builder (inside the state machine) and the task handle.</summary>
-internal sealed class BehaviourRun
+internal sealed class BehaviorRun
 {
     public StateMachineBox? Box;
     public volatile bool IsCompleted;
@@ -44,31 +44,31 @@ internal sealed class BehaviourRun
     {
         Exception = exception;
         IsCompleted = true;
-        if (BehaviourContext.Current is { } context)
+        if (BehaviorContext.Current is { } context)
         {
-            context.Graph.Scheduler.ReportError(new BehaviourFailedException(context.Name, exception));
+            context.Graph.Scheduler.ReportError(new BehaviorFailedException(context.Name, exception));
         }
     }
 }
 
 /// <summary>
-///     Marker for awaiters that schedule their continuation as a behaviour segment themselves. The
+///     Marker for awaiters that schedule their continuation as a behavior segment themselves. The
 ///     builder hands the continuation straight to them; any other awaiter is treated as external.
 /// </summary>
-public interface IBehaviourAwaiter : ICriticalNotifyCompletion
+public interface IBehaviorAwaiter : ICriticalNotifyCompletion
 {
 }
 
-/// <summary>Holds the boxed state machine of one behaviour run and its cached MoveNext delegate.</summary>
+/// <summary>Holds the boxed state machine of one behavior run and its cached MoveNext delegate.</summary>
 internal abstract class StateMachineBox
 {
-    protected StateMachineBox(BehaviourContext context)
+    protected StateMachineBox(BehaviorContext context)
     {
         Context = context;
         MoveNextAction = MoveNext;
     }
 
-    public BehaviourContext Context { get; }
+    public BehaviorContext Context { get; }
 
     public Action MoveNextAction { get; }
 
@@ -85,7 +85,7 @@ internal abstract class StateMachineBox
     }
 }
 
-internal sealed class StateMachineBox<TStateMachine>(BehaviourContext context) : StateMachineBox(context)
+internal sealed class StateMachineBox<TStateMachine>(BehaviorContext context) : StateMachineBox(context)
     where TStateMachine : IAsyncStateMachine
 {
     public TStateMachine StateMachine = default!;
@@ -96,17 +96,17 @@ internal sealed class StateMachineBox<TStateMachine>(BehaviourContext context) :
     }
 }
 
-/// <summary>Async method builder for <see cref="BehaviourTask" />. See the task type for the routing rules.</summary>
-public struct BehaviourTaskMethodBuilder
+/// <summary>Async method builder for <see cref="BehaviorTask" />. See the task type for the routing rules.</summary>
+public struct BehaviorTaskMethodBuilder
 {
-    private BehaviourRun? _run;
+    private BehaviorRun? _run;
 
-    public static BehaviourTaskMethodBuilder Create()
+    public static BehaviorTaskMethodBuilder Create()
     {
         return default;
     }
 
-    public BehaviourTask Task => new(_run ??= new BehaviourRun());
+    public BehaviorTask Task => new(_run ??= new BehaviorRun());
 
     public void Start<TStateMachine>(ref TStateMachine stateMachine) where TStateMachine : IAsyncStateMachine
     {
@@ -119,12 +119,12 @@ public struct BehaviourTaskMethodBuilder
 
     public void SetResult()
     {
-        (_run ??= new BehaviourRun()).SetCompleted();
+        (_run ??= new BehaviorRun()).SetCompleted();
     }
 
     public void SetException(Exception exception)
     {
-        (_run ??= new BehaviourRun()).SetFailed(exception);
+        (_run ??= new BehaviorRun()).SetFailed(exception);
     }
 
     public void AwaitOnCompleted<TAwaiter, TStateMachine>(ref TAwaiter awaiter, ref TStateMachine stateMachine)
@@ -132,7 +132,7 @@ public struct BehaviourTaskMethodBuilder
         where TStateMachine : IAsyncStateMachine
     {
         var box = GetBox(ref stateMachine);
-        if (awaiter is IBehaviourAwaiter)
+        if (awaiter is IBehaviorAwaiter)
         {
             awaiter.OnCompleted(box.MoveNextAction);
         }
@@ -147,7 +147,7 @@ public struct BehaviourTaskMethodBuilder
         where TStateMachine : IAsyncStateMachine
     {
         var box = GetBox(ref stateMachine);
-        if (awaiter is IBehaviourAwaiter)
+        if (awaiter is IBehaviorAwaiter)
         {
             awaiter.UnsafeOnCompleted(box.MoveNextAction);
         }
@@ -159,15 +159,15 @@ public struct BehaviourTaskMethodBuilder
 
     private StateMachineBox GetBox<TStateMachine>(ref TStateMachine stateMachine) where TStateMachine : IAsyncStateMachine
     {
-        var run = _run ??= new BehaviourRun();
+        var run = _run ??= new BehaviorRun();
         if (run.Box is { } existing)
         {
             return existing;
         }
 
-        var context = BehaviourContext.Current
+        var context = BehaviorContext.Current
                       ?? throw new InvalidOperationException(
-                          "A BehaviourTask method must be started from a behaviour segment (JobGraph.Start).");
+                          "A BehaviorTask method must be started from a behavior segment (JobGraph.Start).");
         var box = new StateMachineBox<TStateMachine>(context);
         run.Box = box;
         // Copy the state machine into the box; the copy's builder already refers to this run.

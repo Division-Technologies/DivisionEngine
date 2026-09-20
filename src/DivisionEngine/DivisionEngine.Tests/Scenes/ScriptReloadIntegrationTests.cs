@@ -41,11 +41,11 @@ public sealed class ScriptReloadIntegrationTests
         }
     }
 
-    private sealed class Ticker : Behaviour
+    private sealed class Ticker : Behavior
     {
         public static int Started;
 
-        protected override async BehaviourTask Run(BehaviourContext context)
+        protected override async BehaviorTask Run(BehaviorContext context)
         {
             Interlocked.Increment(ref Started);
             while (true)
@@ -57,7 +57,7 @@ public sealed class ScriptReloadIntegrationTests
     }
 
     [Test]
-    public void AFrameWithDirtyScripts_CarriesTheWorldAcrossAndStopsBehaviours()
+    public void AFrameWithDirtyScripts_CarriesTheWorldAcrossAndStopsBehaviors()
     {
         using var engine = new Engine(NullLogger.Instance, new JobScheduler(2));
         using var database = new AssetDatabase(Path.Combine(_dir, "cache"));
@@ -70,10 +70,10 @@ public sealed class ScriptReloadIntegrationTests
         Ticker.Started = 0;
         engine.Graph.Start(entity, new Ticker());
 
-        // Let the behaviour get going, then make the database want a reload.
+        // Let the behavior get going, then make the database want a reload.
         engine.RunFrame(Realtime.FromSeconds(0));
         engine.RunFrame(Realtime.FromSeconds(0.01));
-        Assert.That(Ticker.Started, Is.EqualTo(1), "the behaviour ran before the reload");
+        Assert.That(Ticker.Started, Is.EqualTo(1), "the behavior ran before the reload");
         Assert.That(engine.Graph.LiveTurnCount, Is.EqualTo(1));
 
         MakeScriptsDirty(database);
@@ -93,7 +93,7 @@ public sealed class ScriptReloadIntegrationTests
 
         // The cancelled turn must stay dead rather than resuming on the next phase.
         engine.RunFrame(Realtime.FromSeconds(0.03));
-        Assert.That(Ticker.Started, Is.EqualTo(1), "the cancelled behaviour was not resumed");
+        Assert.That(Ticker.Started, Is.EqualTo(1), "the cancelled behavior was not resumed");
     }
 
     [Test]

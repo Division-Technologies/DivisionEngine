@@ -3,11 +3,11 @@ using System.Runtime.InteropServices;
 namespace DivisionEngine;
 
 /// <summary>
-///     A version of a component within a phase. Behaviour writes are buffered into a round and
+///     A version of a component within a phase. Behavior writes are buffered into a round and
 ///     committed at the end of the phase in round order, then in (turn, sequence) order; reads
 ///     name the round whose result they want.
 ///     <list type="bullet">
-///         <item><see cref="Initial" />: the state after the phase's systems ran and before any behaviour commit. Never waits.</item>
+///         <item><see cref="Initial" />: the state after the phase's systems ran and before any behavior commit. Never waits.</item>
 ///         <item><see cref="Label" />: a user-registered intermediate round; reading it waits until no turn can still write to it.</item>
 ///         <item><see cref="Main" />: the default round for writes.</item>
 ///         <item><see cref="Completed" />: after every commit of the phase; equivalent to the next phase's initial.</item>
@@ -68,7 +68,7 @@ public enum RoundKind
 }
 
 /// <summary>
-///     One buffered behaviour write: a value (last writer wins) or a modification applied to the
+///     One buffered behavior write: a value (last writer wins) or a modification applied to the
 ///     value current at commit time. Ordered by (turn, sequence), which does not depend on timing.
 /// </summary>
 internal sealed class PendingWrite

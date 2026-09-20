@@ -3,11 +3,11 @@ namespace DivisionEngine;
 /// <summary>
 ///     The issue side of the job system: schedules jobs with declared access sets, infers their
 ///     dependencies from issue order, and hands ready nodes to the <see cref="JobScheduler" />.
-///     Systems issue statically from the main thread; behaviour segments issue dynamically from
+///     Systems issue statically from the main thread; behavior segments issue dynamically from
 ///     whichever worker they end on. Issues are serialized by a lock.
 ///     <para>
-///         Phases (<see cref="BeginPhase" /> / <see cref="EndPhase" />) bound behaviour rounds:
-///         behaviour writes are buffered into rounds and committed at <see cref="EndPhase" /> in
+///         Phases (<see cref="BeginPhase" /> / <see cref="EndPhase" />) bound behavior rounds:
+///         behavior writes are buffered into rounds and committed at <see cref="EndPhase" /> in
 ///         round order then (turn, sequence) order, so the outcome does not depend on timing.
 ///         Segments that try to issue while a phase or frame is closing are deferred to the next
 ///         <see cref="BeginPhase" />, which keeps phases bounded.
@@ -26,15 +26,15 @@ public sealed class JobGraph
     private readonly ResourceTracker _tracker = new();
 
     /// <summary>Every turn started and not yet cancelled, so they can all be stopped at once.</summary>
-    private readonly HashSet<BehaviourContext> _liveTurns = new();
+    private readonly HashSet<BehaviorContext> _liveTurns = new();
 
     /// <summary>Turns that recorded a structural change in the open phase, played back at its end.</summary>
-    private readonly List<BehaviourContext> _commandRecorders = new();
+    private readonly List<BehaviorContext> _commandRecorders = new();
     private int _closedUpTo = -1;
     private bool _closing;
     private PhaseId? _currentPhase;
 
-    /// <summary>Whether the open phase resumes behaviours, i.e. whether a segment may be running.</summary>
+    /// <summary>Whether the open phase resumes behaviors, i.e. whether a segment may be running.</summary>
     private bool _currentPhaseDispatches;
     private string[] _currentLabels = [];
     private bool _entryOpen;
@@ -201,8 +201,8 @@ public sealed class JobGraph
     }
 
     /// <summary>
-    ///     How many segments one behaviour may run per phase before its next segment is deferred to
-    ///     the next phase. Bounds a phase against behaviours that chain data awaits without ever
+    ///     How many segments one behavior may run per phase before its next segment is deferred to
+    ///     the next phase. Bounds a phase against behaviors that chain data awaits without ever
     ///     parking; count-based, so deferral is deterministic.
     /// </summary>
     public int MaxSegmentsPerPhase { get; set; } = 256;
@@ -233,13 +233,13 @@ public sealed class JobGraph
     }
 
     /// <summary>
-    ///     Opens a phase: creates its rounds and, if the phase dispatches behaviours, issues the
+    ///     Opens a phase: creates its rounds and, if the phase dispatches behaviors, issues the
     ///     continuations collected since the last dispatching phase (admitted external awaits,
     ///     deferred segments, completed-round readers, starts) in turn order.
     /// </summary>
-    /// <param name="dispatchBehaviours">False for phases in which no behaviour segment runs (physics, transform propagation, extract).</param>
+    /// <param name="dispatchBehaviors">False for phases in which no behavior segment runs (physics, transform propagation, extract).</param>
     /// <param name="frozenTypes">Component types that may not be written during the phase.</param>
-    public void BeginPhase(PhaseId phase, bool dispatchBehaviours = true, IReadOnlyCollection<ComponentTypeId>? frozenTypes = null)
+    public void BeginPhase(PhaseId phase, bool dispatchBehaviors = true, IReadOnlyCollection<ComponentTypeId>? frozenTypes = null)
     {
         List<Deferred> deferred;
         lock (_issueLock)
@@ -259,20 +259,20 @@ public sealed class JobGraph
             }
 
             _closedUpTo = -1;
-            _entryOpen = dispatchBehaviours;
-            _currentPhaseDispatches = dispatchBehaviours;
+            _entryOpen = dispatchBehaviors;
+            _currentPhaseDispatches = dispatchBehaviors;
             // Snapshot the parked list now: turns that park on this phase while it runs (for example a
-            // behaviour whose first segment is issued from the intake below) resume at the next occurrence,
+            // behavior whose first segment is issued from the intake below) resume at the next occurrence,
             // so what ResumePhase resumes does not depend on how fast segments happen to run.
-            _pendingResume = dispatchBehaviours ? TakeParkedLocked(phase) : [];
-            deferred = dispatchBehaviours ? TakeIntakeLocked() : [];
+            _pendingResume = dispatchBehaviors ? TakeParkedLocked(phase) : [];
+            deferred = dispatchBehaviors ? TakeIntakeLocked() : [];
         }
 
         IssueDeferred(deferred);
     }
 
     /// <summary>
-    ///     Resumes the behaviours that were parked on <paramref name="phase" /> when it began, in turn
+    ///     Resumes the behaviors that were parked on <paramref name="phase" /> when it began, in turn
     ///     order, then closes the phase for entry so that rounds can start closing.
     /// </summary>
     public void ResumePhase(PhaseId phase)
@@ -375,12 +375,12 @@ public sealed class JobGraph
     /// <summary>
     ///     Applies the phase's recorded structural changes, with everything already quiescent.
     ///     <para>
-    ///         Systems go first and behaviours after: a phase's systems are the simulation, and a
-    ///         behaviour reacts to what it saw at the start of the phase.
+    ///         Systems go first and behaviors after: a phase's systems are the simulation, and a
+    ///         behavior reacts to what it saw at the start of the phase.
     ///     </para>
     ///     <para>
     ///         Each turn records into a buffer of its own, and the buffers are played back in turn-id
-    ///         order. Turn ids are assigned when a behaviour starts, so the result is the same however
+    ///         order. Turn ids are assigned when a behavior starts, so the result is the same however
     ///         the segments happened to be scheduled — the same rule that orders buffered value
     ///         writes. Recording into one shared buffer would instead follow whichever segment ran
     ///         first.
@@ -393,7 +393,7 @@ public sealed class JobGraph
             Commands.Playback(World);
         }
 
-        List<BehaviourContext> recorders;
+        List<BehaviorContext> recorders;
         lock (_issueLock)
         {
             if (_commandRecorders.Count == 0)
@@ -401,7 +401,7 @@ public sealed class JobGraph
                 return;
             }
 
-            recorders = new List<BehaviourContext>(_commandRecorders);
+            recorders = new List<BehaviorContext>(_commandRecorders);
             _commandRecorders.Clear();
         }
 
@@ -413,7 +413,7 @@ public sealed class JobGraph
     }
 
     /// <summary>Notes that a turn has something to apply at the end of the phase.</summary>
-    internal void OnCommandsRecorded(BehaviourContext context)
+    internal void OnCommandsRecorded(BehaviorContext context)
     {
         lock (_issueLock)
         {
@@ -481,20 +481,20 @@ public sealed class JobGraph
         return expected.ToArray();
     }
 
-    // --------------------------------------------------------------- behaviours
+    // --------------------------------------------------------------- behaviors
 
     /// <summary>
-    ///     Starts <paramref name="behaviour" /> for <paramref name="entity" />. The first segment (no data
+    ///     Starts <paramref name="behavior" /> for <paramref name="entity" />. The first segment (no data
     ///     access) is issued at the next <see cref="BeginPhase" /> in turn order, never immediately, so
-    ///     when a behaviour first runs does not depend on the worker count. The behaviour is cancelled
+    ///     when a behavior first runs does not depend on the worker count. The behavior is cancelled
     ///     when the entity is destroyed.
     /// </summary>
-    public BehaviourContext Start(Entity entity, Behaviour behaviour, string? name = null)
+    public BehaviorContext Start(Entity entity, Behavior behavior, string? name = null)
     {
-        ArgumentNullException.ThrowIfNull(behaviour);
-        var context = new BehaviourContext(this, entity, behaviour, Interlocked.Increment(ref _nextTurnId),
-            name ?? behaviour.GetType().Name);
-        behaviour.Context = context;
+        ArgumentNullException.ThrowIfNull(behavior);
+        var context = new BehaviorContext(this, entity, behavior, Interlocked.Increment(ref _nextTurnId),
+            name ?? behavior.GetType().Name);
+        behavior.Context = context;
         lock (_issueLock)
         {
             _liveTurns.Add(context);
@@ -519,10 +519,10 @@ public sealed class JobGraph
     /// <summary>
     ///     Cancels every running turn and drops the continuations waiting to resume them.
     ///     <para>
-    ///         A behaviour's suspended state lives in a compiler-generated state machine, which cannot
+    ///         A behavior's suspended state lives in a compiler-generated state machine, which cannot
     ///         be serialized and, after a script reload, belongs to a type that no longer exists. So a
     ///         reload stops every turn rather than trying to carry it across; whatever should outlive
-    ///         the reload has to be in a component, and the behaviour is started again from its entry
+    ///         the reload has to be in a component, and the behavior is started again from its entry
     ///         point. Continuations that arrive afterwards — an external await completing late — find
     ///         their turn cancelled and are dropped.
     ///     </para>
@@ -536,7 +536,7 @@ public sealed class JobGraph
             if (_currentPhaseDispatches)
             {
                 throw new InvalidOperationException(
-                    "Turns cannot be cancelled from a phase that dispatches behaviours; one may be mid-segment. "
+                    "Turns cannot be cancelled from a phase that dispatches behaviors; one may be mid-segment. "
                     + "Cancel between frames or from a phase like FrameBegin.");
             }
 
@@ -560,10 +560,10 @@ public sealed class JobGraph
     }
 
     /// <summary>
-    ///     Issues the next segment of a behaviour with the access it declared at the await.
+    ///     Issues the next segment of a behavior with the access it declared at the await.
     ///     <paramref name="waitRound" /> makes the segment wait for that round to close (labelled reads).
     /// </summary>
-    internal void IssueSegment(BehaviourContext context, AccessSet access, Action continuation, EntityAccess? handle, Round? waitRound)
+    internal void IssueSegment(BehaviorContext context, AccessSet access, Action continuation, EntityAccess? handle, Round? waitRound)
     {
         TaskNode node = null!;
         node = new TaskNode(Scheduler, context.Name, access, NewContext(), false)
@@ -629,7 +629,7 @@ public sealed class JobGraph
             IssueLocked(node);
             if (context.CurrentNode is { } previous)
             {
-                node.DependOn(previous); // turn order: one segment of a behaviour at a time
+                node.DependOn(previous); // turn order: one segment of a behavior at a time
             }
 
             if (waitRound is { } round && _currentPhase is not null)
@@ -646,7 +646,7 @@ public sealed class JobGraph
     }
 
     /// <summary>Parks a continuation until <see cref="ResumePhase" /> is called for <paramref name="phase" />.</summary>
-    internal void ParkOnPhase(BehaviourContext context, PhaseId phase, Action continuation)
+    internal void ParkOnPhase(BehaviorContext context, PhaseId phase, Action continuation)
     {
         lock (_issueLock)
         {
@@ -660,7 +660,7 @@ public sealed class JobGraph
     }
 
     /// <summary>Parks a completed-round read until the phase has committed; it is issued at the next phase.</summary>
-    internal void ParkOnCompleted(BehaviourContext context, AccessSet access, Action continuation, EntityAccess handle)
+    internal void ParkOnCompleted(BehaviorContext context, AccessSet access, Action continuation, EntityAccess handle)
     {
         lock (_issueLock)
         {
@@ -672,7 +672,7 @@ public sealed class JobGraph
     ///     Records the completion of an external await; it enters the graph at the next
     ///     <see cref="AdmitExternal" /> (frame begin), never on the completing thread.
     /// </summary>
-    internal void EnqueueExternal(BehaviourContext context, int sequence, Action continuation)
+    internal void EnqueueExternal(BehaviorContext context, int sequence, Action continuation)
     {
         lock (_issueLock)
         {
@@ -693,7 +693,7 @@ public sealed class JobGraph
     }
 
     /// <summary>Called by a segment when it ends; a turn that did not continue in the phase leaves it.</summary>
-    internal void OnSegmentEnded(BehaviourContext context)
+    internal void OnSegmentEnded(BehaviorContext context)
     {
         lock (_issueLock)
         {
@@ -712,14 +712,14 @@ public sealed class JobGraph
     }
 
     /// <summary>Records a buffered write for the current segment's turn. Called from inside a segment.</summary>
-    internal PendingWrite RecordWrite(BehaviourContext context, Round round, Func<int, PendingWrite> create)
+    internal PendingWrite RecordWrite(BehaviorContext context, Round round, Func<int, PendingWrite> create)
     {
         int index;
         lock (_issueLock)
         {
             if (_currentPhase is null || !context.InPhase)
             {
-                throw new InvalidOperationException("Behaviour writes are only possible inside a phase.");
+                throw new InvalidOperationException("Behavior writes are only possible inside a phase.");
             }
 
             index = ResolveRoundLocked(round);
@@ -744,7 +744,7 @@ public sealed class JobGraph
     ///     The value of a component as seen by a segment: the in-place value, the closed rounds up to
     ///     <paramref name="readRoundIndex" /> in commit order, then the turn's own pending writes.
     /// </summary>
-    internal void ReadOverlay(BehaviourContext context, Entity entity, ComponentTypeInfo info, int readRoundIndex, Span<byte> destination)
+    internal void ReadOverlay(BehaviorContext context, Entity entity, ComponentTypeInfo info, int readRoundIndex, Span<byte> destination)
     {
         if (readRoundIndex == 0 && context.OwnWrites.Count == 0)
         {
@@ -877,7 +877,7 @@ public sealed class JobGraph
         return _currentLabels[index - 1];
     }
 
-    private void EnterPhaseLocked(BehaviourContext context)
+    private void EnterPhaseLocked(BehaviorContext context)
     {
         context.InPhase = true;
         context.CurrentRound = 0;
@@ -886,7 +886,7 @@ public sealed class JobGraph
         _rounds[0].Active++;
     }
 
-    private void AdvanceLocked(BehaviourContext context, int round)
+    private void AdvanceLocked(BehaviorContext context, int round)
     {
         if (round <= context.CurrentRound)
         {
@@ -899,7 +899,7 @@ public sealed class JobGraph
         TryCloseRoundsLocked();
     }
 
-    private void LeavePhaseLocked(BehaviourContext context)
+    private void LeavePhaseLocked(BehaviorContext context)
     {
         _rounds[context.CurrentRound].Active--;
         context.InPhase = false;
@@ -980,11 +980,11 @@ public sealed class JobGraph
         }
     }
 
-    private readonly record struct Parked(BehaviourContext Context, Action Continuation);
+    private readonly record struct Parked(BehaviorContext Context, Action Continuation);
 
-    private readonly record struct ExternalArrival(BehaviourContext Context, ExternalKey Key, Action Continuation);
+    private readonly record struct ExternalArrival(BehaviorContext Context, ExternalKey Key, Action Continuation);
 
-    private readonly record struct Deferred(BehaviourContext Context, AccessSet Access, Action Continuation, EntityAccess? Handle, Round? WaitRound);
+    private readonly record struct Deferred(BehaviorContext Context, AccessSet Access, Action Continuation, EntityAccess? Handle, Round? WaitRound);
 
     /// <summary>Buffered writes of one round of the open phase, plus the turn count that can still write to it.</summary>
     private sealed class RoundState(TaskNode gate)

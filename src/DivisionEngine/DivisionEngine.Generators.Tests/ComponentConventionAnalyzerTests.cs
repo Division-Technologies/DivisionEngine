@@ -107,14 +107,14 @@ public sealed class ComponentConventionAnalyzerTests
     }
 
     [Test]
-    public void ABehaviour_IsAcceptedAsAManagedComponent()
+    public void ABehavior_IsAcceptedAsAManagedComponent()
     {
-        // Behaviour implements ISerializable with an empty default, so a stateless one is fine.
+        // Behavior implements ISerializable with an empty default, so a stateless one is fine.
         Assert.That(Diagnose("""
                              [Component]
-                             public sealed class Idle : Behaviour
+                             public sealed class Idle : Behavior
                              {
-                                 protected override BehaviourTask Run(BehaviourContext context) => default;
+                                 protected override BehaviorTask Run(BehaviorContext context) => default;
                              }
                              """), Is.Empty);
     }

@@ -131,7 +131,7 @@ public sealed class ComponentTypeInfo
         Alignment = alignment;
         IsManaged = isManaged;
         IsTag = isTag;
-        IsBehaviour = isManaged && typeof(Behaviour).IsAssignableFrom(type);
+        IsBehavior = isManaged && typeof(Behavior).IsAssignableFrom(type);
         SerializedTypeId = DivisionEngine.SerializedTypeId.Get(type);
     }
 
@@ -146,8 +146,8 @@ public sealed class ComponentTypeInfo
     public bool IsTag { get; }
     public bool HasChunkData => !IsManaged && !IsTag;
 
-    /// <summary>Whether this component is a <see cref="Behaviour" />, i.e. logic to run rather than data.</summary>
-    public bool IsBehaviour { get; }
+    /// <summary>Whether this component is a <see cref="Behavior" />, i.e. logic to run rather than data.</summary>
+    public bool IsBehavior { get; }
 
     /// <summary>Set when the type stores <see cref="Entity" /> fields that command-buffer playback must remap.</summary>
     internal RawEntityFieldRemapper? EntityRemapper { get; set; }

@@ -5,7 +5,7 @@ namespace DivisionEngine.Authoring.Assets;
 ///     <see cref="WorldReload" /> presented as something <see cref="AssetDatabase.ReloadScripts" />
 ///     can call at the right moments.
 ///     <para>
-///         Behaviour turns are cancelled rather than carried. Their suspended state lives in a
+///         Behavior turns are cancelled rather than carried. Their suspended state lives in a
 ///         compiler-generated state machine belonging to a type that is about to stop existing, so
 ///         the rule is that durable state goes in components and turns restart from their entry
 ///         point. Restarting them is the caller's business — this type only stops them.
@@ -15,7 +15,7 @@ public sealed class WorldReloadParticipant(Engine engine) : IReloadParticipant
 {
     private byte[]? _snapshot;
 
-    /// <summary>Turns cancelled by the last reload, for callers that restart behaviours afterwards.</summary>
+    /// <summary>Turns cancelled by the last reload, for callers that restart behaviors afterwards.</summary>
     public int CancelledTurns { get; private set; }
 
     public void BeforeSwap()

@@ -4,7 +4,7 @@ namespace DivisionEngine.Benchmarks.Core;
 
 /// <summary>
 ///     Per-frame cost of the time providers. Mostly a smoke benchmark that keeps the project wired
-///     up; the entity storage and scheduler benchmarks (plan M1/M2) are the ones that matter.
+///     up; the entity storage and scheduler benchmarks are the ones that matter.
 /// </summary>
 [MemoryDiagnoser]
 public class TimeProviderBenchmarks

@@ -7,7 +7,8 @@ namespace DivisionEngine.Tests.Scheduling;
 /// <summary>
 ///     The sequential oracle: the same scenario must produce the same world whether it runs on
 ///     the main thread alone (issue order = execution order) or on a pool with random timing.
-///     This harness is reused by later milestones (Notes/Core/EntityManagementPlan.md).
+///     Every new System or Behavior scenario is added here, so regressions in scheduling show up
+///     as a hash mismatch rather than as a rare timing bug.
 /// </summary>
 [TestFixture]
 public sealed class DeterminismTests
@@ -44,23 +45,23 @@ public sealed class DeterminismTests
     }
 
     [Test]
-    public void BehaviourScenario_IsDeterministic_AcrossWorkerCountsAndTiming()
+    public void BehaviorScenario_IsDeterministic_AcrossWorkerCountsAndTiming()
     {
-        var reference = RunBehaviourScenario(0, false);
+        var reference = RunBehaviorScenario(0, false);
         foreach (var workers in new[] { 0, 1, 3, 7 })
         {
             foreach (var jitter in new[] { false, true })
             {
-                Assert.That(RunBehaviourScenario(workers, jitter), Is.EqualTo(reference), $"workers={workers} jitter={jitter}");
-                Assert.That(RunBehaviourScenario(workers, jitter), Is.EqualTo(reference), $"workers={workers} jitter={jitter} (repeat)");
+                Assert.That(RunBehaviorScenario(workers, jitter), Is.EqualTo(reference), $"workers={workers} jitter={jitter}");
+                Assert.That(RunBehaviorScenario(workers, jitter), Is.EqualTo(reference), $"workers={workers} jitter={jitter} (repeat)");
             }
         }
     }
 
     [Test]
-    public void BehaviourScenario_ActuallyChangesTheWorld()
+    public void BehaviorScenario_ActuallyChangesTheWorld()
     {
-        Assert.That(RunBehaviourScenario(0, false, 1), Is.Not.EqualTo(RunBehaviourScenario(0, false, 2)));
+        Assert.That(RunBehaviorScenario(0, false, 1), Is.Not.EqualTo(RunBehaviorScenario(0, false, 2)));
     }
 
     [Test]
@@ -221,9 +222,9 @@ public sealed class DeterminismTests
         return hash;
     }
 
-    private sealed class Attacker(Entity target, bool jitter) : Behaviour
+    private sealed class Attacker(Entity target, bool jitter) : Behavior
     {
-        protected override async BehaviourTask Run(BehaviourContext context)
+        protected override async BehaviorTask Run(BehaviorContext context)
         {
             while (true)
             {
@@ -237,9 +238,9 @@ public sealed class DeterminismTests
         }
     }
 
-    private sealed class Healer(Entity target, Entity shared, bool jitter) : Behaviour
+    private sealed class Healer(Entity target, Entity shared, bool jitter) : Behavior
     {
-        protected override async BehaviourTask Run(BehaviourContext context)
+        protected override async BehaviorTask Run(BehaviorContext context)
         {
             while (true)
             {
@@ -259,7 +260,7 @@ public sealed class DeterminismTests
         }
     }
 
-    private static ulong RunBehaviourScenario(int workers, bool jitter, int seed = 99)
+    private static ulong RunBehaviorScenario(int workers, bool jitter, int seed = 99)
     {
         using var scheduler = new JobScheduler(workers);
         using var world = new World();

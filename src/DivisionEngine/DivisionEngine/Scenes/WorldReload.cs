@@ -15,7 +15,7 @@ namespace DivisionEngine;
 ///         Reading the snapshot back after the swap resolves component types by their persisted ids,
 ///         so a component the user edited — a field added, removed or reordered — still loads, with
 ///         the fields landing where they now belong. What cannot survive is anything that was never
-///         in a component: <see cref="Behaviour" /> continuations in particular, which is why the
+///         in a component: <see cref="Behavior" /> continuations in particular, which is why the
 ///         standing rule is to keep durable state in components and let turns restart.
 ///     </para>
 /// </summary>

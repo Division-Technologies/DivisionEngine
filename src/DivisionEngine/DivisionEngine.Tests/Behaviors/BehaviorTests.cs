@@ -1,10 +1,10 @@
 using System.Collections.Concurrent;
 using DivisionEngine.Tests.Entities;
 
-namespace DivisionEngine.Tests.Behaviours;
+namespace DivisionEngine.Tests.Behaviors;
 
 [TestFixture]
-public sealed class BehaviourTests
+public sealed class BehaviorTests
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
     private JobGraph _graph = null!;
@@ -56,25 +56,25 @@ public sealed class BehaviourTests
         return _world.CreateEntity(types);
     }
 
-    // ------------------------------------------------------------------ behaviours
+    // ------------------------------------------------------------------ behaviors
 
-    private sealed class Reader(Entity target) : Behaviour
+    private sealed class Reader(Entity target) : Behavior
     {
         public Position Value;
         public bool InSegment;
 
-        protected override async BehaviourTask Run(BehaviourContext context)
+        protected override async BehaviorTask Run(BehaviorContext context)
         {
             Value = await context.Read<Position>(target);
-            InSegment = BehaviourContext.Current == context && JobSafety.Current is not null;
+            InSegment = BehaviorContext.Current == context && JobSafety.Current is not null;
         }
     }
 
-    private sealed class Counter(int iterations, bool jitter) : Behaviour
+    private sealed class Counter(int iterations, bool jitter) : Behavior
     {
         public int Count;
 
-        protected override async BehaviourTask Run(BehaviourContext context)
+        protected override async BehaviorTask Run(BehaviorContext context)
         {
             for (var i = 0; i < iterations; i++)
             {
@@ -84,14 +84,14 @@ public sealed class BehaviourTests
                     Thread.SpinWait(Random.Shared.Next(0, 3_000));
                 }
 
-                Count++; // not atomic: segments of one behaviour must never overlap
+                Count++; // not atomic: segments of one behavior must never overlap
             }
         }
     }
 
-    private sealed class Incrementer(Entity shared, int iterations) : Behaviour
+    private sealed class Incrementer(Entity shared, int iterations) : Behavior
     {
-        protected override async BehaviourTask Run(BehaviourContext context)
+        protected override async BehaviorTask Run(BehaviorContext context)
         {
             for (var i = 0; i < iterations; i++)
             {
@@ -102,11 +102,11 @@ public sealed class BehaviourTests
         }
     }
 
-    private sealed class PhaseWaiter(Action<BehaviourContext> onResume, int times = 1) : Behaviour
+    private sealed class PhaseWaiter(Action<BehaviorContext> onResume, int times = 1) : Behavior
     {
         public int Resumed;
 
-        protected override async BehaviourTask Run(BehaviourContext context)
+        protected override async BehaviorTask Run(BehaviorContext context)
         {
             for (var i = 0; i < times; i++)
             {
@@ -117,9 +117,9 @@ public sealed class BehaviourTests
         }
     }
 
-    private sealed class Script(Func<BehaviourContext, BehaviourTask> body) : Behaviour
+    private sealed class Script(Func<BehaviorContext, BehaviorTask> body) : Behavior
     {
-        protected override BehaviourTask Run(BehaviourContext context)
+        protected override BehaviorTask Run(BehaviorContext context)
         {
             return body(context);
         }
@@ -128,7 +128,7 @@ public sealed class BehaviourTests
     // ------------------------------------------------------------------ tests
 
     [Test]
-    public void Behaviour_ReadsThroughASegment_AndCompletes()
+    public void Behavior_ReadsThroughASegment_AndCompletes()
     {
         var target = Make(ComponentType<Position>.Id);
         _world.SetComponent(target, new Position(1, 2, 3));
@@ -150,10 +150,10 @@ public sealed class BehaviourTests
     [Test]
     public void SameTurn_SegmentsNeverOverlap_DifferentTurnsInterleave()
     {
-        const int behaviours = 40;
+        const int behaviors = 40;
         const int iterations = 30;
-        var counters = new List<(BehaviourContext context, Counter counter)>();
-        for (var i = 0; i < behaviours; i++)
+        var counters = new List<(BehaviorContext context, Counter counter)>();
+        for (var i = 0; i < behaviors; i++)
         {
             var counter = new Counter(iterations, true);
             counters.Add((_graph.Start(Make(ComponentType<Position>.Id), counter), counter));
@@ -165,7 +165,7 @@ public sealed class BehaviourTests
     }
 
     [Test]
-    public void DifferentBehaviours_RunConcurrently()
+    public void DifferentBehaviors_RunConcurrently()
     {
         using var barrier = new Barrier(3);
         var passed = 0;
@@ -190,16 +190,16 @@ public sealed class BehaviourTests
     public void Modifications_Accumulate_AcrossTurns()
     {
         var shared = Make(ComponentType<Health>.Id);
-        const int behaviours = 20;
+        const int behaviors = 20;
         const int iterations = 25;
-        var contexts = new List<BehaviourContext>();
-        for (var i = 0; i < behaviours; i++)
+        var contexts = new List<BehaviorContext>();
+        for (var i = 0; i < behaviors; i++)
         {
             contexts.Add(_graph.Start(Make(), new Incrementer(shared, iterations)));
         }
 
         RunUntil(() => contexts.All(c => c.Task.IsCompleted));
-        Assert.That(_world.GetComponent<Health>(shared).Value, Is.EqualTo(behaviours * iterations));
+        Assert.That(_world.GetComponent<Health>(shared).Value, Is.EqualTo(behaviors * iterations));
     }
 
     [Test]
@@ -214,7 +214,7 @@ public sealed class BehaviourTests
         var query = _world.Query().With<Position>().Build();
         var torn = 0;
         var reads = 0;
-        var contexts = new List<BehaviourContext>();
+        var contexts = new List<BehaviorContext>();
         for (var i = 0; i < 30; i++)
         {
             var target = targets[i % targets.Length];
@@ -241,7 +241,7 @@ public sealed class BehaviourTests
         while (!contexts.All(c => c.Task.IsCompleted))
         {
             var value = ++frames;
-            Assert.That(frames, Is.LessThan(500), "behaviours did not finish");
+            Assert.That(frames, Is.LessThan(500), "behaviors did not finish");
             _graph.BeginPhase(PhaseId.Update);
             _graph.ScheduleChunks("write positions", query, Access.Write<Position>(), (in _, chunk) =>
             {
@@ -273,7 +273,7 @@ public sealed class BehaviourTests
         _graph = new JobGraph(_scheduler, _world);
 
         var order = new List<int>();
-        var contexts = new List<BehaviourContext>();
+        var contexts = new List<BehaviorContext>();
         for (var i = 0; i < 20; i++)
         {
             contexts.Add(_graph.Start(Make(), new PhaseWaiter(ctx => order.Add(ctx.TurnId))));
@@ -281,7 +281,7 @@ public sealed class BehaviourTests
 
         Frame(); // first segments run and park on Update
         Assert.That(order, Is.Empty, "nothing resumes until the phase is resumed");
-        Assert.That(_scheduler.LiveNodeCount, Is.Zero, "parked behaviours do not keep the frame alive");
+        Assert.That(_scheduler.LiveNodeCount, Is.Zero, "parked behaviors do not keep the frame alive");
 
         Frame();
         Assert.That(order, Is.EqualTo(contexts.Select(c => c.TurnId).OrderBy(id => id)));
@@ -296,7 +296,7 @@ public sealed class BehaviourTests
         var context = _graph.Start(Make(), new Script(async ctx =>
         {
             await Task.Delay(20);
-            resumedInSegment = BehaviourContext.Current == ctx;
+            resumedInSegment = BehaviorContext.Current == ctx;
             resumed = true;
         }));
 
@@ -396,7 +396,7 @@ public sealed class BehaviourTests
     }
 
     [Test]
-    public void UndeclaredAccess_InASegment_FailsTheBehaviour()
+    public void UndeclaredAccess_InASegment_FailsTheBehavior()
     {
         var a = Make(ComponentType<Position>.Id, ComponentType<Velocity>.Id);
         var context = _graph.Start(Make(), new Script(async ctx =>
@@ -407,7 +407,7 @@ public sealed class BehaviourTests
 
         Assert.That(() => RunUntil(() => context.Task.IsCompleted),
             Throws.TypeOf<JobFailedException>()
-                .With.InnerException.TypeOf<BehaviourFailedException>()
+                .With.InnerException.TypeOf<BehaviorFailedException>()
                 .With.InnerException.InnerException.TypeOf<JobAccessViolationException>());
         Assert.That(context.Task.IsFaulted, Is.True);
     }
@@ -474,6 +474,6 @@ public sealed class BehaviourTests
             engine.RunFrame(Realtime.FromTicks(i, 1000)); // 1 ms apart: no fixed step is owed
         }
 
-        Assert.That(waiter.Resumed, Is.EqualTo(3), "the first frame starts the behaviour; each later frame resumes it once");
+        Assert.That(waiter.Resumed, Is.EqualTo(3), "the first frame starts the behavior; each later frame resumes it once");
     }
 }

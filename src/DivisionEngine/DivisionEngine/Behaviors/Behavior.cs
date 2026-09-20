@@ -4,24 +4,24 @@ namespace DivisionEngine;
 
 /// <summary>
 ///     Per-entity logic written as an async method. Each segment between awaits runs as a job with
-///     the access declared at the await; segments of one behaviour never overlap (turn-based
-///     concurrency), segments of different behaviours run in parallel by default.
+///     the access declared at the await; segments of one behavior never overlap (turn-based
+///     concurrency), segments of different behaviors run in parallel by default.
 ///     Writes are buffered into rounds and committed at the end of the phase (see <see cref="Round" />).
 ///     <para>
-///         A behaviour is also a managed component: adding one to an entity is what makes it run, and
-///         <see cref="BehaviourStartSystem" /> starts any that is not already running. That is what
-///         lets behaviours come back after a scene load or a script reload — a turn's suspended state
-///         cannot be carried across either, so what is saved is "this entity has this behaviour", and
+///         A behavior is also a managed component: adding one to an entity is what makes it run, and
+///         <see cref="BehaviorStartSystem" /> starts any that is not already running. That is what
+///         lets behaviors come back after a scene load or a script reload — a turn's suspended state
+///         cannot be carried across either, so what is saved is "this entity has this behavior", and
 ///         it starts again from the top. Durable state belongs in ordinary components.
 ///     </para>
-///     Serializing contributes nothing by default; a behaviour with fields worth saving marks itself
+///     Serializing contributes nothing by default; a behavior with fields worth saving marks itself
 ///     <c>[AutoSerialization]</c>, whose generated implementation takes over.
 /// </summary>
-public abstract class Behaviour : ISerializable
+public abstract class Behavior : ISerializable
 {
-    public BehaviourContext? Context { get; internal set; }
+    public BehaviorContext? Context { get; internal set; }
 
-    /// <summary>True while a turn of this behaviour is running and has not been cancelled.</summary>
+    /// <summary>True while a turn of this behavior is running and has not been cancelled.</summary>
     public bool IsRunning => Context is { IsCancelled: false };
 
     void ISerializable.Serialize<T>(ref T serializer)
@@ -32,41 +32,41 @@ public abstract class Behaviour : ISerializable
     {
     }
 
-    /// <summary>The behaviour's logic. Started by <see cref="JobGraph.Start" /> inside the first segment.</summary>
-    protected abstract BehaviourTask Run(BehaviourContext context);
+    /// <summary>The behavior's logic. Started by <see cref="JobGraph.Start" /> inside the first segment.</summary>
+    protected abstract BehaviorTask Run(BehaviorContext context);
 
-    internal BehaviourTask InvokeRun(BehaviourContext context)
+    internal BehaviorTask InvokeRun(BehaviorContext context)
     {
         return Run(context);
     }
 }
 
-/// <summary>Wraps an exception thrown by a behaviour; rethrown on the main thread by the wait that observes it.</summary>
-public sealed class BehaviourFailedException(string behaviour, Exception inner)
-    : Exception($"Behaviour '{behaviour}' failed. See InnerException.", inner)
+/// <summary>Wraps an exception thrown by a behavior; rethrown on the main thread by the wait that observes it.</summary>
+public sealed class BehaviorFailedException(string behavior, Exception inner)
+    : Exception($"Behavior '{behavior}' failed. See InnerException.", inner)
 {
-    public string Behaviour { get; } = behaviour;
+    public string Behavior { get; } = behavior;
 }
 
 /// <summary>
-///     The running behaviour's view of the engine: which entity it belongs to, and the awaitables
+///     The running behavior's view of the engine: which entity it belongs to, and the awaitables
 ///     that declare access (<see cref="Read{T}" />, <see cref="Write{T}" />, <see cref="Access" />),
 ///     wait for a phase, or run work in the background.
 /// </summary>
-public sealed class BehaviourContext
+public sealed class BehaviorContext
 {
-    [ThreadStatic] internal static BehaviourContext? Current;
+    [ThreadStatic] internal static BehaviorContext? Current;
 
     private volatile bool _cancelled;
     private EntityCommandBuffer? _commands;
     private int _externalSequence;
     private int _writeSequence;
 
-    internal BehaviourContext(JobGraph graph, Entity entity, Behaviour behaviour, int turnId, string name)
+    internal BehaviorContext(JobGraph graph, Entity entity, Behavior behavior, int turnId, string name)
     {
         Graph = graph;
         Entity = entity;
-        Behaviour = behaviour;
+        Behavior = behavior;
         TurnId = turnId;
         Name = name;
     }
@@ -74,15 +74,15 @@ public sealed class BehaviourContext
     public JobGraph Graph { get; }
     public World World => Graph.World;
     public Entity Entity { get; }
-    public Behaviour Behaviour { get; }
+    public Behavior Behavior { get; }
 
-    /// <summary>Deterministic ordering key: behaviours started earlier resume earlier and commit earlier.</summary>
+    /// <summary>Deterministic ordering key: behaviors started earlier resume earlier and commit earlier.</summary>
     public int TurnId { get; }
 
     public string Name { get; }
 
     /// <summary>The run's completion state; available once the first segment has executed.</summary>
-    public BehaviourTask Task { get; private set; }
+    public BehaviorTask Task { get; private set; }
 
     public bool IsCancelled => _cancelled;
 
@@ -99,7 +99,7 @@ public sealed class BehaviourContext
     /// <summary>This turn's buffered writes in the current phase, for read-your-own-writes.</summary>
     internal List<PendingWrite> OwnWrites { get; } = new();
 
-    /// <summary>Stops the behaviour: pending continuations are dropped when they would resume.</summary>
+    /// <summary>Stops the behavior: pending continuations are dropped when they would resume.</summary>
     public void Cancel()
     {
         _cancelled = true;
@@ -110,13 +110,13 @@ public sealed class BehaviourContext
     ///     components — to be applied at the end of the current phase.
     ///     <para>
     ///         A structural change conflicts with every entity access, so it cannot happen while a
-    ///         segment is running; what a behaviour does here is state its intent, and the change lands
+    ///         segment is running; what a behavior does here is state its intent, and the change lands
     ///         at the phase boundary. It becomes visible in the next phase, the same delay that
     ///         buffered value writes have.
     ///     </para>
     ///     <para>
     ///         The buffer belongs to this turn alone, so recording never contends with another
-    ///         behaviour, and the turns are applied in turn-id order — the result does not depend on
+    ///         behavior, and the turns are applied in turn-id order — the result does not depend on
     ///         which segment happened to run first.
     ///     </para>
     /// </summary>
@@ -177,7 +177,7 @@ public sealed class BehaviourContext
         ArgumentNullException.ThrowIfNull(modify);
         if (Current != this)
         {
-            throw new InvalidOperationException("Modify must be called from inside one of the behaviour's own segments.");
+            throw new InvalidOperationException("Modify must be called from inside one of the behavior's own segments.");
         }
 
         var write = Graph.RecordWrite(this, round ?? Round.Main,
@@ -213,7 +213,7 @@ public sealed class BehaviourContext
 
     internal void RunFirstSegment()
     {
-        Task = Behaviour.InvokeRun(this);
+        Task = Behavior.InvokeRun(this);
     }
 
     internal void RunSegment(TaskNode node, Action continuation, EntityAccess? handle)
@@ -255,12 +255,12 @@ public sealed class BehaviourContext
 public sealed class EntityAccess
 {
     private const int MaxStackBytes = 1024;
-    private readonly BehaviourContext _context;
+    private readonly BehaviorContext _context;
     private Dictionary<(int entity, int type), PendingWrite>? _writes;
     private volatile bool _active;
     private Exception? _activationError;
 
-    internal EntityAccess(BehaviourContext context, AccessSet access, Round readRound, Round writeRound)
+    internal EntityAccess(BehaviorContext context, AccessSet access, Round readRound, Round writeRound)
     {
         _context = context;
         Access = access;
@@ -360,7 +360,7 @@ public sealed class EntityAccess
         }
         catch (Exception ex)
         {
-            // Surface inside the behaviour (a catchable behaviour failure) rather than as a scheduler error.
+            // Surface inside the behavior (a catchable behavior failure) rather than as a scheduler error.
             _activationError = ex;
         }
     }

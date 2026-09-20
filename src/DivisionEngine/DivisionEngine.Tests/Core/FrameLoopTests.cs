@@ -61,9 +61,9 @@ public sealed class FrameLoopTests
         }
     }
 
-    private sealed class Script(Func<BehaviourContext, BehaviourTask> body) : Behaviour
+    private sealed class Script(Func<BehaviorContext, BehaviorTask> body) : Behavior
     {
-        protected override BehaviourTask Run(BehaviourContext context)
+        protected override BehaviorTask Run(BehaviorContext context)
         {
             return body(context);
         }
@@ -112,7 +112,7 @@ public sealed class FrameLoopTests
     }
 
     [Test]
-    public void Behaviour_AwaitingFixedUpdate_ResumesOncePerStep()
+    public void Behavior_AwaitingFixedUpdate_ResumesOncePerStep()
     {
         var count = 0;
         _engine.Graph.Start(_engine.World.CreateEntity(), new Script(async ctx =>
@@ -147,8 +147,8 @@ public sealed class FrameLoopTests
         {
             Assert.That(_log.Count(e => e.phase == PhaseId.FrameBegin), Is.EqualTo(2));
             Assert.That(_log.Count(e => e.phase == PhaseId.LateUpdate), Is.EqualTo(2));
-            Assert.That(_engine.Loop[PhaseId.Physics].DispatchesBehaviours, Is.False);
-            Assert.That(_engine.Loop[PhaseId.Update].DispatchesBehaviours, Is.True);
+            Assert.That(_engine.Loop[PhaseId.Physics].DispatchesBehaviors, Is.False);
+            Assert.That(_engine.Loop[PhaseId.Update].DispatchesBehaviors, Is.True);
             Assert.That(() => _engine.Loop[PhaseId.Register("no-such-phase")], Throws.TypeOf<KeyNotFoundException>());
         });
     }
@@ -167,7 +167,7 @@ public sealed class FrameLoopTests
     }
 
     [Test]
-    public void FrozenType_BehaviourWrite_IsCarriedToTheNextAllowingPhase()
+    public void FrozenType_BehaviorWrite_IsCarriedToTheNextAllowingPhase()
     {
         _engine.Loop.Freeze<Position>(PhaseId.LateUpdate, PhaseId.Extract, PhaseId.Render);
         var target = _engine.World.CreateEntity(ComponentType<Position>.Id);

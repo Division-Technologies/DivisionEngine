@@ -10,15 +10,15 @@ public sealed partial class Follower : SerializableObject
     [Serialize] public float Distance;
 }
 
-/// <summary>A behaviour holding an entity reference, which is a natural thing to write.</summary>
+/// <summary>A behavior holding an entity reference, which is a natural thing to write.</summary>
 [Component]
 [AutoSerialization]
 [TypeId("8e3f0a21-64cd-4f79-9b48-31a7c05d2201")]
-public sealed partial class Chaser : Behaviour
+public sealed partial class Chaser : Behavior
 {
     [Serialize] public Entity Quarry;
 
-    protected override async BehaviourTask Run(BehaviourContext context)
+    protected override async BehaviorTask Run(BehaviorContext context)
     {
         while (true)
         {
@@ -58,7 +58,7 @@ public sealed class ManagedEntityReferenceTests
     }
 
     [Test]
-    public void ABehavioursEntityField_SurvivesToo()
+    public void ABehaviorsEntityField_SurvivesToo()
     {
         using var source = new World();
         var quarry = source.CreateEntity();

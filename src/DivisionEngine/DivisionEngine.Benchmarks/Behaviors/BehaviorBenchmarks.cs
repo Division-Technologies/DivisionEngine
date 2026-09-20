@@ -1,16 +1,16 @@
 using BenchmarkDotNet.Attributes;
 using DivisionEngine.Benchmarks.Entities;
 
-namespace DivisionEngine.Benchmarks.Behaviours;
+namespace DivisionEngine.Benchmarks.Behaviors;
 
 /// <summary>
-///     Behaviour lane baseline (plan M3): the per-segment cost of dynamic issue (entity-level
+///     Behavior lane baseline: the per-segment cost of dynamic issue (entity-level
 ///     dependency inference + dispatch + async resume) and the cost of resuming a phase.
 /// </summary>
 [MemoryDiagnoser]
-public class BehaviourBenchmarks
+public class BehaviorBenchmarks
 {
-    private const int Behaviours = 1_000;
+    private const int Behaviors = 1_000;
     private const int SegmentsPerFrame = 4;
 
     private JobGraph _graph = null!;
@@ -21,11 +21,11 @@ public class BehaviourBenchmarks
 
     public static IEnumerable<int> WorkerCounts => [0, Math.Max(1, Environment.ProcessorCount - 1)];
 
-    private sealed class Reader(Entity target) : Behaviour
+    private sealed class Reader(Entity target) : Behavior
     {
         public float Sum;
 
-        protected override async BehaviourTask Run(BehaviourContext context)
+        protected override async BehaviorTask Run(BehaviorContext context)
         {
             while (true)
             {
@@ -53,7 +53,7 @@ public class BehaviourBenchmarks
             targets[i] = _world.CreateEntity(ComponentType<Position>.Id);
         }
 
-        for (var i = 0; i < Behaviours; i++)
+        for (var i = 0; i < Behaviors; i++)
         {
             _graph.Start(_world.CreateEntity(), new Reader(targets[i % targets.Length]));
         }
@@ -68,9 +68,9 @@ public class BehaviourBenchmarks
         _world.Dispose();
     }
 
-    /// <summary>One frame: resume 1000 behaviours, each running 1 + 4 segments (4 entity-level reads).</summary>
+    /// <summary>One frame: resume 1000 behaviors, each running 1 + 4 segments (4 entity-level reads).</summary>
     [Benchmark]
-    public void Frame_1000Behaviours_5SegmentsEach()
+    public void Frame_1000Behaviors_5SegmentsEach()
     {
         _graph.BeginPhase(PhaseId.Update);
         _graph.ResumePhase(PhaseId.Update);

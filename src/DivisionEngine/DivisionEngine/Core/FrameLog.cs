@@ -2,7 +2,7 @@ namespace DivisionEngine;
 
 /// <summary>
 ///     Identifies one external completion (an await on something outside the graph, or a background
-///     job) of one behaviour: the turn and the per-turn sequence number assigned when the await
+///     job) of one behavior: the turn and the per-turn sequence number assigned when the await
 ///     started. The sequence is assigned inside the segment, so it does not depend on timing.
 /// </summary>
 public readonly record struct ExternalKey(int TurnId, int Sequence) : IComparable<ExternalKey>
@@ -35,7 +35,7 @@ public sealed class FrameRecord
 /// <summary>
 ///     A recording of the non-deterministic inputs of a run, frame by frame. Feeding it back with
 ///     <see cref="Engine.Replay" /> reproduces the run: the same clock samples and the same external
-///     completions are admitted in the same frames, so every job and behaviour sees the same
+///     completions are admitted in the same frames, so every job and behavior sees the same
 ///     values. Determinism of everything else is the job system's guarantee.
 /// </summary>
 public sealed class FrameLog

@@ -3,10 +3,11 @@ using System.Collections.Concurrent;
 namespace DivisionEngine;
 
 /// <summary>
-///     Identifies something a job can declare access to. In this milestone resources are
-///     type-level: the world structure (archetype membership, entity existence), each component
-///     type, and named resources for things outside the world (a command buffer, an event queue).
-///     Entity-level resources hang under the type-level ones later (Notes/Core/JobSystem.md).
+///     Identifies something a job can declare access to at type level: the world structure
+///     (archetype membership, entity existence), each component type, and named resources for
+///     things outside the world (a command buffer, an event queue). Entity-level accesses hang
+///     under the type-level ones as <see cref="EntityComponentAccess" /> pairs, so they are not
+///     ResourceIds themselves (Notes/Core/JobSystem.md).
 ///     Encoding: 0 = structure, positive = component type id + 1, negative = named resource.
 /// </summary>
 public readonly record struct ResourceId(int Value)

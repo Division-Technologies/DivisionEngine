@@ -14,7 +14,7 @@ public readonly record struct EntityComponentAccess(Entity Entity, ComponentType
 ///     dependencies from these sets (shared reads, exclusive writes) and the debug safety checks
 ///     verify that the job touches nothing else.
 ///     Type-level entries cover a whole component type (systems); entity-level entries cover one
-///     component of one entity (behaviour segments). Any component access implies a read of
+///     component of one entity (behavior segments). Any component access implies a read of
 ///     <see cref="ResourceId.Structure" />, so a job that writes the structure (structural changes)
 ///     is ordered against every other entity access.
 /// </summary>
@@ -193,7 +193,7 @@ public struct AccessSetBuilder
 
     private static readonly ResourceId[] StructureOnly = [ResourceId.Structure];
 
-    /// <summary>Builds the set. Kept allocation-light: behaviour segments build one per await.</summary>
+    /// <summary>Builds the set. Kept allocation-light: behavior segments build one per await.</summary>
     public AccessSet Build()
     {
         var writes = Normalize(_writes, AccessSet.ResourceComparer.Instance);
