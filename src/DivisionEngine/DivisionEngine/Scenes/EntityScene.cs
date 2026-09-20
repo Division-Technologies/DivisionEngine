@@ -22,6 +22,7 @@ public sealed class EntitySceneException(string message) : InvalidOperationExcep
 ///         loads — the layout is re-derived from the types of the current run.
 ///     </para>
 /// </summary>
+[TypeId("2d5b8e07-14af-4c93-a6d2-9f01b3e6c800")]
 public sealed class EntityScene : ISerializableObject
 {
     private const int FieldEntities = 0;
