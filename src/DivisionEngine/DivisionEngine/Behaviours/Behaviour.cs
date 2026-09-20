@@ -7,7 +7,6 @@ namespace DivisionEngine;
 ///     the access declared at the await; segments of one behaviour never overlap (turn-based
 ///     concurrency), segments of different behaviours run in parallel by default.
 ///     Writes are buffered into rounds and committed at the end of the phase (see <see cref="Round" />).
-/// </summary>
 ///     <para>
 ///         A behaviour is also a managed component: adding one to an entity is what makes it run, and
 ///         <see cref="BehaviourStartSystem" /> starts any that is not already running. That is what
@@ -59,6 +58,7 @@ public sealed class BehaviourContext
     [ThreadStatic] internal static BehaviourContext? Current;
 
     private volatile bool _cancelled;
+    private EntityCommandBuffer? _commands;
     private int _externalSequence;
     private int _writeSequence;
 
@@ -103,6 +103,37 @@ public sealed class BehaviourContext
     public void Cancel()
     {
         _cancelled = true;
+    }
+
+    /// <summary>
+    ///     Records structural changes — creating and destroying entities, adding and removing
+    ///     components — to be applied at the end of the current phase.
+    ///     <para>
+    ///         A structural change conflicts with every entity access, so it cannot happen while a
+    ///         segment is running; what a behaviour does here is state its intent, and the change lands
+    ///         at the phase boundary. It becomes visible in the next phase, the same delay that
+    ///         buffered value writes have.
+    ///     </para>
+    ///     <para>
+    ///         The buffer belongs to this turn alone, so recording never contends with another
+    ///         behaviour, and the turns are applied in turn-id order — the result does not depend on
+    ///         which segment happened to run first.
+    ///     </para>
+    /// </summary>
+    public EntityCommandBuffer Commands
+    {
+        get
+        {
+            var commands = _commands ??= new EntityCommandBuffer();
+            Graph.OnCommandsRecorded(this);
+            return commands;
+        }
+    }
+
+    /// <summary>Hands the turn's recorded commands to the graph for playback, if it recorded any.</summary>
+    internal EntityCommandBuffer? TakeRecordedCommands()
+    {
+        return _commands is { IsEmpty: false } ? _commands : null;
     }
 
     // --------------------------------------------------------------- awaitables

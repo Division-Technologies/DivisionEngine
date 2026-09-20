@@ -329,6 +329,17 @@ public static class Access
         return new AccessSetBuilder().Write<T>();
     }
 
+    public static AccessSetBuilder Read(ResourceId resource)
+    {
+        return new AccessSetBuilder().Read(resource);
+    }
+
+    /// <summary>Declares a named or instance resource, such as recording into a command buffer.</summary>
+    public static AccessSetBuilder Write(ResourceId resource)
+    {
+        return new AccessSetBuilder().Write(resource);
+    }
+
     public static AccessSetBuilder WriteStructure()
     {
         return new AccessSetBuilder().WriteStructure();

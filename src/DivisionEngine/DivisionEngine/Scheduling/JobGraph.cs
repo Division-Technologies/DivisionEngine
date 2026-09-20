@@ -27,6 +27,9 @@ public sealed class JobGraph
 
     /// <summary>Every turn started and not yet cancelled, so they can all be stopped at once.</summary>
     private readonly HashSet<BehaviourContext> _liveTurns = new();
+
+    /// <summary>Turns that recorded a structural change in the open phase, played back at its end.</summary>
+    private readonly List<BehaviourContext> _commandRecorders = new();
     private int _closedUpTo = -1;
     private bool _closing;
     private PhaseId? _currentPhase;
@@ -47,6 +50,20 @@ public sealed class JobGraph
 
     public JobScheduler Scheduler { get; }
     public World World { get; }
+
+    /// <summary>
+    ///     The structural changes systems record during the open phase, applied at its end.
+    ///     <para>
+    ///         Structural changes conflict with every entity access, so they cannot happen while jobs
+    ///         are reading chunks; recording them and applying them at the phase boundary is what turns
+    ///         "create this entity" into something a parallel job may say. A job that records here
+    ///         declares <c>Write(graph.Commands.Resource)</c>, which orders the recorders against each
+    ///         other, and playback follows record order — so the outcome does not depend on timing.
+    ///     </para>
+    ///     Use <see cref="SchedulePlayback" /> with a buffer of your own to apply changes at some other
+    ///     point inside a phase.
+    /// </summary>
+    public EntityCommandBuffer Commands { get; } = new();
 
     /// <summary>Time captured into jobs scheduled from now on. Set by system groups before scheduling.</summary>
     public Time Time { get; set; }
@@ -338,6 +355,7 @@ public sealed class JobGraph
             }
 
             Commit(rounds, frozen);
+            ApplyStructuralChanges();
         }
         finally
         {
@@ -350,6 +368,58 @@ public sealed class JobGraph
                 _frozen = null;
                 _rounds = [];
                 _closing = false;
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Applies the phase's recorded structural changes, with everything already quiescent.
+    ///     <para>
+    ///         Systems go first and behaviours after: a phase's systems are the simulation, and a
+    ///         behaviour reacts to what it saw at the start of the phase.
+    ///     </para>
+    ///     <para>
+    ///         Each turn records into a buffer of its own, and the buffers are played back in turn-id
+    ///         order. Turn ids are assigned when a behaviour starts, so the result is the same however
+    ///         the segments happened to be scheduled — the same rule that orders buffered value
+    ///         writes. Recording into one shared buffer would instead follow whichever segment ran
+    ///         first.
+    ///     </para>
+    /// </summary>
+    private void ApplyStructuralChanges()
+    {
+        if (!Commands.IsEmpty)
+        {
+            Commands.Playback(World);
+        }
+
+        List<BehaviourContext> recorders;
+        lock (_issueLock)
+        {
+            if (_commandRecorders.Count == 0)
+            {
+                return;
+            }
+
+            recorders = new List<BehaviourContext>(_commandRecorders);
+            _commandRecorders.Clear();
+        }
+
+        recorders.Sort(static (a, b) => a.TurnId.CompareTo(b.TurnId));
+        foreach (var context in recorders)
+        {
+            context.TakeRecordedCommands()?.Playback(World);
+        }
+    }
+
+    /// <summary>Notes that a turn has something to apply at the end of the phase.</summary>
+    internal void OnCommandsRecorded(BehaviourContext context)
+    {
+        lock (_issueLock)
+        {
+            if (!_commandRecorders.Contains(context))
+            {
+                _commandRecorders.Add(context);
             }
         }
     }
