@@ -115,40 +115,93 @@ read は特定のラウンドを要求する。**既定は `initial`**。write �
 
 コンポーネント追加/削除・エンティティ生成/破棄は「ワールド構造」資源への write。ほぼ全タスクと競合するため巨大な競合集合を持ち、自然にフェーズ境界の同期点になる。同期点を特別扱いのバリアとしてではなく、ただのタスクとしてグラフに載せる点が要点。粒度は「ワールド全体で 1 資源」から始める。
 
+## 実装メモ（M2 時点）
+
+実装計画 M2 で System レーンを実装した（`DivisionEngine/Scheduling/`）。設計との対応と、実装して分かったこと:
+
+- 資源 id は「0 = 構造、正 = コンポーネント型、負 = 名前付き / インスタンス固有」の 1 つの整数に符号化した。コンポーネントアクセスは構造の read を暗黙に含み、構造の write（構造変更、従来型の即時 System）は全エンティティアクセスと競合する。**名前付き資源は構造と独立**なので、構造 write だけでは順序付けされない。コマンドバッファには固有の資源 id を持たせ、記録側は write、playback 側は「構造 write + バッファ write」を宣言する。この宣言が抜けていた版は逐次オラクルが 1 回目で検出した
+- チャンク並列ジョブのチャンク集合は**ノードが ready になった時点**でスナップショットする。発行時にスナップショットすると、依存先の構造変更（playback）が追加したチャンクが見えない
+- メインスレッドはバリア待ちの間ワーカーとして参加し、メインスレッド専用キューを唯一 drain できるスレッドでもある。完了通知は「待機中フラグ」付きのセマフォで行い、待たれていないノードの完了は通知しない
+- 安全機構はワーカーごとのスレッド静的な「実行中の AccessSet」で実現し、アクセサ側で照合する。コストは小さな sorted 配列の二分探索
+- 例外はノードに記録してスケジューラに報告し、次の `Wait` / `WaitAll` で `JobFailedException` として再スローする。ワーカーは止まらない
+
+## 実装メモ（M3 時点）
+
+実装計画 M3 で Behaviour レーンを実装した（`DivisionEngine/Behaviours/`、トラッカーとグラフの拡張は `Scheduling/`）。
+
+- **ターンの単位は Behaviour インスタンス**（= 1 本の async メソッド）。1 エンティティに複数の Behaviour を付ければそれぞれ独立したターンになる。同一 Behaviour のセグメントは「前セグメントが次を発行する」構造上重ならないが、念のため次セグメントは前セグメントのノードに明示的に依存させている
+- **カスタム AsyncMethodBuilder の本当の役割**は「外部 await の迂回」だった。エンジン自身の awaitable は `UnsafeOnCompleted` で自分でセグメントを発行できるので、ビルダーは `IBehaviourAwaiter` 以外の awaiter（`Task` 等）の継続を取り込みキュー行きに差し替えるだけでよい。ステートマシンのプール化はまだしていない（M9）
+- **awaiter の状態は構築時に持たせる**。最初の await でステートマシンがボックス化（コピー）されるのは `OnCompleted` 呼び出しの前なので、`OnCompleted` の中で awaiter 自身に書いた状態はコピー側に残らない。アクセスハンドルや結果ボックスは `GetAwaiter()` の時点で確保する。標準の awaiter が `OnCompleted` で自身を変更しないのと同じ理由
+- **多粒度トラッカー**は型ノードに `EntityWriters`（IX）/ `EntityReaders`（IS）を追加し、エンティティ×型の疎エントリは型の write 世代（epoch）で失効させる。型 write は全リストをクリアし epoch を進める。エンティティ read は型の最終 writer とエンティティの最終 writer に、エンティティ write はさらに型 reader とエンティティ reader に依存する
+- **動的発行は発行ロックで直列化**し、ワーカーからの発行を許可した。フレームを閉じる（`EndFrame`）間に発行されたセグメントは次フレームの取り込みへ繰り延べる。これによりフェーズ await を含まない読みの連鎖でもフレームが有界になる（1 フレームに 1 ホップ以上は進む）
+- **セグメントの実行前にエンティティの生存を確認**し、破棄されていればターンをキャンセルする（async メソッドは放置され、完了しない）。相手エンティティの消失は `Read` が `EntityNotAliveException` を投げ、`TryRead` が null を返す
+- **アクセスハンドル（`EntityAccess`）**はセグメント終了で無効化する。セグメント内の宣言外アクセスと、終了後のハンドル使用はどちらも Behaviour の失敗として `JobFailedException` → `BehaviourFailedException` の連鎖で `WaitAll` に浮上する
+- **フェーズ再開は TurnId 順に発行**する。実行は並列なので観測順は不定（0 ワーカーなら発行順 = 実行順）。決定性そのものは M4 のラウンドで扱う
+- 外部 await と `RunBackground` の完了は取り込みキューに積まれ、`DrainIntake`（Engine.RunFrame の冒頭、M5 で FrameBegin へ移動）で TurnId 順に発行される
+
+## 実装メモ（M4 時点）
+
+実装計画 M4 でラウンドを実装した（`Behaviours/Round.cs`、`JobGraph` のフェーズ / ラウンド / コミット）。設計からの主な確定・変更点:
+
+- **`initial` の定義を「そのフェーズの System 適用後、Behaviour コミット前」に確定した**。System ジョブはフェーズ冒頭で静的に発行され、Behaviour の再開はその後（`BeginPhase` → System の発行 → `ResumePhase` → `EndPhase`）なので、トラッカーがエンティティ read を型 write の後に並べる。Behaviour の write はすべてバッファされフェーズ末にコミットされるため、フェーズ中のインプレースデータは Behaviour からは不変に見える。この結果、設計で検討していた `[Snapshot]`（copy-on-first-write）は**不要**になった
+- **累積更新は `Modify<T>(e, f, round)`**。`Write` は last-writer-wins（キー順）なので、read-modify-write を複数ターンから行うと最後の書き手だけが残る。`Modify` はコミット時にその時点の値へ関数を適用するもので、キー順に適用されるため非可換な更新も決定的になる。関数は純粋でなければならない（コミット時とオーバーレイ読み取り時の両方で呼ばれる）
+- **ラベル付き read はゲートノードで待つ**。ラウンド k のゲートは「エントリが閉じている」かつ「ラウンド ≤ k に居るターンが 0」で開く。エントリはそのフェーズの `ResumePhase` 完了時に閉じ、それ以降に開始・再開されるターンは次フェーズへ送られる（閉じたラウンドへの書き込みを構造的に防ぐ）
+- **ラベル付き read の値は閉じたラウンドのバッファをキー順に重ねて計算する**（インプレースはフェーズ中不変なので MVCC の層はバッファそのもの）。`completed` の read はフェーズ末まで待ち、次フェーズの `initial` 読みとして再発行される
+- **ターンのラウンド前進は発行時に行う**。write ハンドル付きセグメントの発行はその write ラウンドへ、ラウンド k の read は k+1 へ前進させる。read だけのセグメントは前進しない（後で任意のラウンドに書ける余地を残す）。`Modify` は前進させない（同一セグメント内の別ラウンドのバッファがまだ可変なため）
+- **`Start` は常に次の `BeginPhase` で TurnId 順に発行される**。以前の「フェーズ外なら即時」は、0 ワーカーでは次の `WaitAll` まで走らないため、Behaviour が動き始めるフレームがワーカー数に依存していた。決定性ハーネスが最初に検出した非決定性がこれ
+- **`ResumePhase` は `BeginPhase` 時点の待機リストのスナップショットを再開する**。フェーズ中に待機したターン（取り込みから発行された最初のセグメントなど）は次回に回す。セグメントの実行速度に結果が依存しないようにするため
+- **フェーズの有界性はターンごとのセグメント数上限（`MaxSegmentsPerPhase`、既定 256）で担保する**。当初の「`EndPhase` 中の発行は繰り延べ」だけだと、エンジンループでは `ResumePhase` 直後に `EndPhase` が来るため、再開セグメントの次ホップが常に次フェーズへ回ってしまった。上限は回数ベースなので決定的
+- 決定性ハーネス（`DeterminismTests.BehaviourScenario`）: 攻撃者が `damage` ラウンドに `Modify`、回復者が `damage` を読んで `main` に `Modify` し、共有エンティティへ `Write`（last-writer-wins）、System が位置を積分する。ワーカー数 0/1/3/7 × ジッタ有無 × 2 回でハッシュ一致
+
 ## API スケッチ
 
+M3 時点の実装済み API（ラウンド引数は M4 で追加する）:
+
 ```csharp
-// 既定: initial を読む。何も待たない
-LocalTransform t = await other.ReadAsync<LocalTransform>();
+public sealed class Chaser : Behaviour
+{
+    protected override async BehaviourTask Run(BehaviourContext ctx)
+    {
+        while (true)
+        {
+            // タイミング用 awaitable（バリア意味論なし）。再開直後のセグメントはデータアクセスを持たない
+            await ctx.Phase(PhaseId.Update);
 
-// ラベル付きラウンドを読む: そのラベルの write が全部確定するまで待つ
-Health h = await other.ReadAsync<Health>(round: "damage");
+            // 読み: 値のコピーを返す。相手が消えていれば EntityNotAliveException（TryRead は null）
+            LocalTransform target = await ctx.Read<LocalTransform>(_target);
 
-// completed を読む: 次フェーズの initial と等価。このフェーズへの write 権を放棄する
-Health h = await other.ReadAsync<Health>(Round.Completed);
+            // 書き: このセグメントの間だけ有効な参照
+            var self = await ctx.Write<LocalTransform>(ctx.Entity);
+            self.Value.Position += Direction(self.Value.Position, target.Position) * step;
 
-// 既定: main ラウンドへの write。バッファされ、確定時にキー順コミット
-using (var w = await other.WriteAsync<LocalTransform>())
-    w.Value.Position += delta;
+            // 複数同時宣言: 1 セグメントで複数のエンティティ×型を触る
+            var access = await ctx.Access().Read<Health>(_target).Write<Health>(ctx.Entity);
+            access.Ref<Health>(ctx.Entity).Current += access.Get<Health>(_target).Current / 10;
 
-// ラベル付き write
-using (var w = await other.WriteAsync<Health>(label: "damage"))
-    w.Value.Current -= amount;
-
-// 複数同時宣言: 1 セグメントで複数資源を触る
-using (var (a, b) = await World.AccessAsync(Read<LocalTransform>(e1), Write<Health>(e2)))
-    ...
-
-// 重い計算はプールに逃がす。結果は外部 await として次フレームの FrameBegin で取り込まれる
-var path = await ctx.RunBackground(() => FindPath(from, to));
-
-// タイミング用 awaitable（バリア意味論なし）
-await Phase.Update;
+            // 重い計算はプールに逃がす。結果は次フレームの取り込みで届く
+            var path = await ctx.RunBackground(() => FindPath(from, to));
+        }
+    }
+}
 ```
 
-- `ReadAsync` の既定（`initial`）は値のコピーを返す。unmanaged はコピーが安価なので、保持型の read は不要
-- `WriteAsync` の戻り値はセグメント終了時に自動でバッファへ積まれる
-- `AccessAsync` は 1 セグメントに複数資源を宣言する形。入れ子の `await` で逐次獲得する必要はない（デッドロックが構造的に起きないので順序規約も不要）
+M4 で追加したラウンド API:
+
+```csharp
+graph.RegisterRounds(PhaseId.Update, "damage");                      // フェーズごとのラベル列（initial < damage < main < completed）
+
+Health h = await ctx.Read<Health>(other, Round.Label("damage"));    // damage ラウンドが閉じるまで待ち、その結果を読む
+Health h = await ctx.Read<Health>(other, Round.Completed);          // 次フェーズの initial と等価
+var w = await ctx.Write<Health>(other, Round.Label("damage"));      // damage ラウンドへのバッファ書き込み（last-writer-wins）
+ctx.Modify<Health>(other, h => h with { Current = h.Current - 10 }, Round.Label("damage")); // コミット時に関数を適用（累積に使う）
+await ctx.Access().Read<A>(e1).Write<B>(e2).At(Round.Label("damage")).To(Round.Main); // 複数宣言 + ラウンド指定
+```
+
+- `Read` の既定（`initial`）は値のコピーを返し、何も待たない。unmanaged はコピーが安価なので、保持型の read は不要
+- `Write` はバッファへの参照を返す。バッファはそのターンが読む値（initial + 自分の保留書き込み）で初期化され、フェーズ末にキー順でコミットされる。複数ターンからの累積は `Modify` を使う
+- `Access()` は 1 セグメントに複数資源を宣言する形。入れ子の `await` で逐次獲得する必要はない（デッドロックが構造的に起きないので順序規約も不要）
+- アクセスハンドルはセグメント終了で無効化され、次の await をまたいで使うと失敗する
+- `Round` に string からの暗黙変換は付けない。付けると `cond ? null : round` の `null` が string と推論され `Round.Label(null)` になる（実際に踏んだ）
 
 ## Analyzer による規約強制
 

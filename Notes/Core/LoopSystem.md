@@ -2,13 +2,13 @@
 
 フレームループのフェーズ構成と、その上でのタスク実行の時間的規律に関する設計ノート。並列実行基盤（依存グラフ・ラウンド）は [JobSystem.md](./JobSystem.md)、エンティティ側の前提は [SceneManagement.md](./SceneManagement.md) を参照。
 
-## 現状の実装
+## 現状の実装（M5 時点）
 
-`Engine.Main` が `RootSystemGroup` を毎フレーム実行する。`RootSystemGroup` は `FixedUpdateSystemGroup` → `UpdateSystemGroup` → `PresentationSystemGroup` の順に子グループを持ち、各グループは `ITimeProvider` を通じて自身の時間軸（固定ステップ / 可変ステップ）で 0 回以上実行される。`FrameContext.ActiveTime` はグループ実行中だけ差し替えられる。
+`Engine.RunFrame` が `FrameLoop`（`SystemGroup`）を毎フレーム実行する。`FrameLoop` は下記フェーズ列を `PhaseGroup`（1 フェーズ = 1 グループ）として持ち、固定ステップの 4 フェーズは `TimeSteppedGroup<FixedUpdateTimeProvider>` の子としてステップごとに回る。各 `PhaseGroup` は `BeginPhase` → 子 System の発行 → （再開フェーズなら）`ResumePhase` → `EndPhase` を行う。可変ステップのフェーズはフレーム時計（`Engine` の `UpdateTimeProvider`）の時刻を使う。
 
-この「SystemGroup + TimeProvider」の骨格は以下の設計でもそのまま使う。フェーズは SystemGroup として表現し、Fixed 系は固定ステップのプロバイダ、それ以外は可変ステップのプロバイダを持つ。
+`FrameLoop[PhaseId]` でフェーズに System を追加し、`FrameLoop.Freeze<T>(phases...)` で凍結型を宣言する。`Engine.AddSystem(ISystem)` は FrameBegin への追加。
 
-既知の問題: `FixedUpdateTimeProvider.DoUpdate` は経過時間を `_fixedDeltaTime` ではなく `_frameCount` で割っており、`_accumulated` も更新されない。固定ステップの回数計算が意図どおりになっていないので、フェーズ設計を反映する際に書き直す（下記「固定ステップ」参照）。
+時間プロバイダは実装計画 M0 で書き直した。`FixedUpdateTimeProvider` はアキュムレータ方式 + 最大キャッチアップ回数（既定 8）で、超過分は原点をずらして捨てる（シミュレーション時刻は飛ばず実時間に遅れる。Unity の `maximumDeltaTime` と同じ挙動）。`UpdateTimeProvider` は最初の更新を原点とし、初回のデルタは 0。`Realtime.FromTicks` / `FromSeconds` でテスト・リプレイ用に明示的な時刻を作れる。
 
 ## 既存エンジンの比較
 
@@ -57,22 +57,33 @@ System レーンと Behaviour レーンの扱いは非対称にする。
 
 ### ラウンドとフェーズ
 
-各フェーズは資源（エンティティ×型）ごとに `initial → (ユーザー定義ラベル)… → completed` のバージョン列を持つ（詳細は [JobSystem.md](./JobSystem.md)）。フェーズとの対応は次のとおり。
+各フェーズは資源（エンティティ×型）ごとに `initial → (ユーザー定義ラベル)… → main → completed` のバージョン列を持つ（詳細は [JobSystem.md](./JobSystem.md)）。M4 で実装した 1 フェーズの流れ:
 
-- `initial(P)` = フェーズ P 開始時点の状態 = `completed(P-1)`
-- System の write は既定でそのフェーズの主ラウンド（`main`）に所属する
-- フェーズ末の System バリアで `main` の確定条件のうち System 側が満たされる。Behaviour 側の write は発行の静止 + キー順コミットで確定する
-- `completed(P)` の read はフェーズ P の全 write 確定後にしか走れないので、実質「フェーズ P+1 の initial を読む」のと等価。`completed` を読んだセグメントはフェーズ P への write 権を放棄したものとみなす
+1. `BeginPhase(P)`: ラウンドを作り、取り込みキュー（外部 await の完了、繰り延べセグメント、`completed` 読み、新規 `Start`）を TurnId 順に発行する。このフェーズで再開する待機リストはこの時点でスナップショットする
+2. System が静的にジョブを発行する（型レベル、インプレース）
+3. `ResumePhase(P)`: スナップショットした待機ターンを TurnId 順に再開し、エントリを閉じる（以降に開始・再開するターンは次フェーズ）
+4. Behaviour のセグメントが走る。read はエンティティレベルの依存で System の write の後に並ぶ。write はラウンドへバッファされる
+5. `EndPhase(P)`: 静止を待ち（ターンごとのセグメント数上限で有界）、残りのラウンドを閉じ、バッファをラウンド順 → (TurnId, seq) 順にメインスレッドでコミットする。`completed` 読みは取り込みへ回す
 
-ラウンドのラベル列（順序）はフェーズごとに静的に登録する。例: Update フェーズに `initial < damage < heal < main < completed` を登録し、ダメージ計算 System が `damage` ラベルで Health を書き、回復 Behaviour が `damage` の Health を読んで `heal` で書く。
+対応関係:
+
+- `initial(P)` = フェーズ P の System 適用後・Behaviour コミット前の状態。`completed(P-1)` に P の System の効果を足したもの
+- System はラウンドに属さない（Behaviour より前に走る）。System が Behaviour のコミット結果を見たければ次フェーズで読む
+- `completed(P)` の read は次フェーズの `initial` 読みとして再発行される。`completed` を読んだセグメントはフェーズ P への write 権を放棄したものとみなす
+- 待機リストのスナップショットにより、新しく `Start` した Behaviour は「次のフェーズで最初のセグメントが走り、その次の該当フェーズで再開される」。2 フェーズ分の遅延と引き換えに、開始タイミングがワーカー数や実行速度に依存しない
+
+ラウンドのラベル列（順序）はフェーズごとに静的に登録する（`graph.RegisterRounds(PhaseId.Update, "damage", "heal")`）。例: 攻撃 Behaviour が `damage` ラウンドに `Modify` し、回復 Behaviour が `damage` の Health を読んで `main` に `Modify` する。
 
 ### フェーズごとの書き込み可能型
 
-「LateUpdate 中 Transform は不変」のようなフェーズ保証は、フェーズごとに「このフェーズで write を受け付ける型」を宣言することで表現する。
+「LateUpdate 中 Transform は不変」のようなフェーズ保証は、フェーズごとに「このフェーズで write を受け付けない型」（凍結型）を宣言することで表現する。
 
-- 例: TransformPropagation 以降 Extract までは Transform 系の型に対する write を受け付けない
-- 受け付けない write が Behaviour から発行された場合はエラーではなく、次に受け付けるフェーズ（次フレームの FixedPre / Update）へ自動繰り延べする
+- 例: TransformPropagation 以降 Render までは Transform 系の型を凍結する
+- System の型レベル write が凍結型に当たる場合は発行時にエラー（設定ミス扱い）
+- Behaviour のバッファ書き込みはエラーにせず、コミット時に持ち越して次に許可されるフェーズのコミットで適用する（キー順、そのフェーズ自身の書き込みより先）
 - これにより「Transform の World 値は LateUpdate / Extract で確定している」が API 契約になる。Analyzer で静的に検出できる範囲は検出する
+
+M5 で `FrameLoop.Freeze<T>(phases...)` として実装した。Transform 系の既定設定は M6 で入れる。
 
 ### 構造変更の同期点
 
@@ -83,8 +94,8 @@ System レーンと Behaviour レーンの扱いは非対称にする。
 
 ### 固定ステップ
 
-- アキュムレータ方式。`realtime - initial` から期待ステップ数を計算し、不足分だけ Fixed 群を回す
-- 最大キャッチアップ回数を設ける（spiral of death 対策）。上限を超えた分は捨て、シミュレーション時刻を実時間に追従させる
+- アキュムレータ方式。`realtime - origin` から期待ステップ数を計算し、不足分だけ Fixed 群を回す
+- 最大キャッチアップ回数を設ける（spiral of death 対策、既定 8）。上限を超えた分は原点を前にずらして捨てる。シミュレーション時刻は連続のまま実時間に遅れる（時刻が飛ぶより、ゲームプレイにとって安全）
 - Transform 補間: 物理が固定ステップで Transform を書き、Presentation が可変ステップの場合、補間なしだと低レート物理でカクつく。FixedPre で前回 Transform を退避し Extract 時に補間する設計余地を残す。初期実装で入れるかは未決
 
 ### メインスレッドの役割
@@ -97,9 +108,11 @@ System レーンと Behaviour レーンの扱いは非対称にする。
 
 I/O 完了・タイマー・OS イベント・ネットワーク受信は発行順を乱す最後の源になる。
 
-- 外部イベントは到着時にはキューに積むだけとし、FrameBegin で決定的なキー（到着フレーム内の種別 + 通し番号）順に取り込む
+- 外部イベントは到着時にはキューに積むだけとし、FrameBegin で決定的なキー順に取り込む
 - 取り込んだ列をリプレイ用に記録できるようにする。これで決定性は「入力列に対する決定性」として閉じる
 - 外部 await から戻る Behaviour の継続もこの取り込みに従う。つまり外部 await の完了は次フレームの FrameBegin まで観測されない（同一フレーム内の内部 await は即時再開）
+
+M5 で実装した範囲: 外部 await と `RunBackground` の完了は `JobGraph` の到着キューに溜まり、`Engine.RunFrame` の冒頭で `AdmitExternal` が (TurnId, ターン内連番) のキー順に取り込む。連番は await を開始した時点でセグメント内で採番するので、キーは実行タイミングに依存しない。`FrameLog` は各フレームの `Realtime` と取り込んだキー列を記録し、`Engine.Replay(log)` は記録どおりの時刻・キーで再生する（記録されたキーが未到着なら到着を待ち、記録外の到着は保留する）。OS 入力・ネットワークは入力マイルストーンで同じ枠組みに載せる。
 
 ### レンダリングのパイプライン化
 
@@ -115,7 +128,7 @@ Extract 以降は render world しか参照しないので、フレーム N の 
 - Transform 補間を初期実装に含めるか
 - 構造変更の同期点の粒度（全フェーズ境界で開始）
 - ラウンドラベル列の登録 API（属性 / 明示登録）
-- 固定ステップの既定値と最大キャッチアップ回数
+- 固定ステップの既定値（現状 0.02s、最大キャッチアップ 8 回は暫定）
 
 ## 参考資料
 
