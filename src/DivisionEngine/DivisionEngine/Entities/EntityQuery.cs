@@ -162,6 +162,20 @@ public sealed class EntityQuery
         }
     }
 
+    /// <summary>
+    ///     Forgets the archetypes matched so far, so the next use rescans. Called when the world drops
+    ///     its archetypes (<see cref="World.Clear" />); the query object itself stays alive because
+    ///     systems hold on to it across a reload.
+    /// </summary>
+    internal void Reset()
+    {
+        lock (_lock)
+        {
+            _matched.Clear();
+            _scannedArchetypes = 0;
+        }
+    }
+
     /// <summary>Snapshot of the chunks currently matched, in archetype then chunk order.</summary>
     internal List<Chunk> CollectChunks(List<Chunk> into)
     {

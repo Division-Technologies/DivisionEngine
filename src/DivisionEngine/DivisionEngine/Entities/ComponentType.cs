@@ -2,6 +2,7 @@ using System.Numerics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.Loader;
 
 namespace DivisionEngine;
 
@@ -178,7 +179,7 @@ public static class ComponentTypeRegistry
     private const int MaxAlignment = 16;
     private static readonly Lock RegistrationLock = new();
     private static readonly Dictionary<string, ComponentTypeId> BySerializedTypeId = new(StringComparer.Ordinal);
-    private static ComponentTypeInfo[] _infos = new ComponentTypeInfo[64];
+    private static ComponentTypeInfo?[] _infos = new ComponentTypeInfo?[64];
     private static int _count;
 
     public static int Count => Volatile.Read(ref _count);
@@ -236,7 +237,53 @@ public static class ComponentTypeRegistry
             throw new ArgumentOutOfRangeException(nameof(id), $"Unknown component type id {id.Value}.");
         }
 
-        return infos[id.Value];
+        return infos[id.Value] ?? throw new InvalidOperationException(
+            $"Component type id {id.Value} belonged to an assembly that has been unloaded.");
+    }
+
+    /// <summary>
+    ///     Drops every component type defined in a collectible load context — that is, every component
+    ///     from user scripts — so the assembly holding them can actually be unloaded.
+    ///     <para>
+    ///         The registry holds a <see cref="Type" /> per component, and a strong reference to a type
+    ///         keeps its whole load context alive. Nothing else in the engine pins user assemblies, so
+    ///         without this an <c>AssemblyLoadContext.Unload</c> never completes and every reload leaks
+    ///         a copy of the user's code.
+    ///     </para>
+    ///     <para>
+    ///         Call it only with the world emptied (<see cref="World.Clear" />): archetypes are keyed on
+    ///         the ids being dropped. Ids are never reused, so handles cached in
+    ///         <see cref="ComponentType{T}" /> for an unloaded type fail loudly rather than silently
+    ///         naming a different component.
+    ///     </para>
+    /// </summary>
+    /// <returns>How many types were dropped.</returns>
+    public static int UnregisterUnloadable()
+    {
+        lock (RegistrationLock)
+        {
+            var infos = _infos;
+            var removed = 0;
+            for (var i = 0; i < _count; i++)
+            {
+                var info = infos[i];
+                if (info is null || !IsUnloadable(info.Type))
+                {
+                    continue;
+                }
+
+                BySerializedTypeId.Remove(info.SerializedTypeId);
+                infos[i] = null;
+                removed++;
+            }
+
+            return removed;
+        }
+    }
+
+    private static bool IsUnloadable(Type type)
+    {
+        return AssemblyLoadContext.GetLoadContext(type.Assembly) is { IsCollectible: true };
     }
 
     /// <summary>
@@ -288,7 +335,7 @@ public static class ComponentTypeRegistry
             var infos = _infos;
             if (index == infos.Length)
             {
-                var grown = new ComponentTypeInfo[infos.Length * 2];
+                var grown = new ComponentTypeInfo?[infos.Length * 2];
                 Array.Copy(infos, grown, infos.Length);
                 infos = grown;
             }

@@ -1,3 +1,7 @@
+using System.Buffers;
+using VYaml.Emitter;
+using VYaml.Parser;
+
 namespace DivisionEngine;
 
 /// <summary>Thrown when a scene cannot be captured from, or applied to, a world.</summary>
@@ -28,6 +32,55 @@ public sealed class EntityScene : ISerializableObject
     public LocalId Id { get; set; }
 
     public int EntityCount => _entities.Count;
+
+    // ---------------------------------------------------------------- snapshots
+
+    /// <summary>
+    ///     Writes the scene to a self-contained byte buffer.
+    ///     <para>
+    ///         This is the form that survives a change to the component types themselves, and the
+    ///         reason a reload has to pass through it rather than just capture and re-apply: capture
+    ///         copies component values as raw chunk bytes, laid out for the types of the moment,
+    ///         whereas writing them out goes field by field. Read back against changed types, the
+    ///         fields land where they now belong.
+    ///     </para>
+    /// </summary>
+    public byte[] ToBytes()
+    {
+        var writer = new ArrayBufferWriter<byte>();
+        var emitter = new Utf8YamlEmitter(writer);
+        var serializer = new YamlSerializer(emitter);
+        serializer.BeginObject(Id, typeof(EntityScene));
+        ((ISerializable)this).Serialize(ref serializer);
+        serializer.EndObject();
+        return writer.WrittenSpan.ToArray();
+    }
+
+    /// <summary>
+    ///     Reads back a scene written by <see cref="ToBytes" />. Component types are resolved by their
+    ///     persisted ids against whatever is registered now, so this must run after any assembly swap
+    ///     that redefines them.
+    /// </summary>
+    public static EntityScene FromBytes(ReadOnlyMemory<byte> bytes)
+    {
+        var parser = new YamlParser(new ReadOnlySequence<byte>(bytes));
+        var deserializer = new YamlDeserializer(parser, NoReferences.Instance);
+        deserializer.TryBeginObject(out _, out _);
+        var scene = new EntityScene();
+        ((ISerializable)scene).Deserialize(ref deserializer);
+        return scene;
+    }
+
+    /// <summary>A scene holds no object references today, so nothing should ask to resolve one.</summary>
+    private sealed class NoReferences : ISerializedObjectResolver
+    {
+        public static readonly NoReferences Instance = new();
+
+        public ISerializableObject? Resolve(GlobalId id)
+        {
+            return null;
+        }
+    }
 
     // ------------------------------------------------------------------ capture
 

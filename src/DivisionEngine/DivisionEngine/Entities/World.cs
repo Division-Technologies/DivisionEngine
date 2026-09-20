@@ -26,8 +26,8 @@ public sealed class World : IDisposable
     private readonly Dictionary<ArchetypeKey, Archetype> _archetypesByKey = new(ArchetypeKey.Comparer.Instance);
     private readonly Stack<int> _freeIndices = new();
     private readonly Dictionary<QueryDescription, EntityQuery> _queries = new();
-    private readonly Archetype _rootArchetype;
     private readonly List<IStructuralHook> _structuralHooks = new();
+    private Archetype _rootArchetype;
     private bool _disposed;
     private EntityLocation[] _locations = new EntityLocation[256];
     private int _nextIndex;
@@ -63,6 +63,49 @@ public sealed class World : IDisposable
 
             archetype.Chunks.Clear();
         }
+    }
+
+    /// <summary>
+    ///     Empties the world: every entity is gone, every chunk is freed, and the archetypes built so
+    ///     far are dropped. Cached queries are kept but reset, because systems hold references to them
+    ///     across the reload this exists for.
+    ///     <para>
+    ///         Archetypes are keyed on <see cref="ComponentTypeId" />s, so this has to run before any
+    ///         component type is unregistered — see
+    ///         <see cref="ComponentTypeRegistry.UnregisterUnloadable" />.
+    ///     </para>
+    ///     Structural hooks survive; they belong to the engine, not to the contents.
+    /// </summary>
+    public void Clear()
+    {
+        ThrowIfDisposed();
+        JobSafety.AssertWrite(ResourceId.Structure);
+
+        foreach (var archetype in _archetypes)
+        {
+            foreach (var chunk in archetype.Chunks)
+            {
+                chunk.Free();
+            }
+
+            archetype.Chunks.Clear();
+        }
+
+        _archetypes.Clear();
+        _archetypesByKey.Clear();
+        _freeIndices.Clear();
+        Array.Clear(_locations);
+        Array.Clear(_versions);
+        _nextIndex = 0;
+        EntityCount = 0;
+        StructuralVersion++;
+
+        foreach (var query in _queries.Values)
+        {
+            query.Reset();
+        }
+
+        _rootArchetype = GetOrCreateArchetype([]);
     }
 
     // ---------------------------------------------------------------- entities

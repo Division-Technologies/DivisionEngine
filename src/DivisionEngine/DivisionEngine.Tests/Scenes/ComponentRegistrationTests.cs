@@ -1,6 +1,3 @@
-using System.Buffers;
-using VYaml.Emitter;
-using VYaml.Parser;
 
 namespace DivisionEngine.Tests.Scenes;
 
@@ -141,26 +138,6 @@ public sealed class ComponentRegistrationTests
 
     private static EntityScene RoundTrip(EntityScene scene)
     {
-        var writer = new ArrayBufferWriter<byte>();
-        var emitter = new Utf8YamlEmitter(writer);
-        var serializer = new YamlSerializer(emitter);
-        serializer.BeginObject(new LocalId(0), typeof(EntityScene));
-        ((ISerializable)scene).Serialize(ref serializer);
-        serializer.EndObject();
-
-        var parser = new YamlParser(new ReadOnlySequence<byte>(writer.WrittenMemory));
-        var deserializer = new YamlDeserializer(parser, new NullResolver());
-        deserializer.TryBeginObject(out _, out _);
-        var loaded = new EntityScene();
-        ((ISerializable)loaded).Deserialize(ref deserializer);
-        return loaded;
-    }
-
-    private sealed class NullResolver : ISerializedObjectResolver
-    {
-        public ISerializableObject? Resolve(GlobalId id)
-        {
-            return null;
-        }
+        return EntityScene.FromBytes(scene.ToBytes());
     }
 }
