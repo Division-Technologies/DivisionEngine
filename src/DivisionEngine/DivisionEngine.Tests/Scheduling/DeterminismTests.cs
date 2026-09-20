@@ -1,4 +1,6 @@
+using System.Numerics;
 using DivisionEngine.Tests.Entities;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace DivisionEngine.Tests.Scheduling;
 
@@ -59,6 +61,164 @@ public sealed class DeterminismTests
     public void BehaviourScenario_ActuallyChangesTheWorld()
     {
         Assert.That(RunBehaviourScenario(0, false, 1), Is.Not.EqualTo(RunBehaviourScenario(0, false, 2)));
+    }
+
+    [Test]
+    public void HierarchyScenario_IsDeterministic_AcrossWorkerCountsAndTiming()
+    {
+        var reference = RunHierarchyScenario(0, false);
+        foreach (var workers in new[] { 0, 1, 3, 7 })
+        {
+            foreach (var jitter in new[] { false, true })
+            {
+                Assert.That(RunHierarchyScenario(workers, jitter), Is.EqualTo(reference), $"workers={workers} jitter={jitter}");
+                Assert.That(RunHierarchyScenario(workers, jitter), Is.EqualTo(reference), $"workers={workers} jitter={jitter} (repeat)");
+            }
+        }
+    }
+
+    [Test]
+    public void HierarchyScenario_ActuallyChangesTheWorld()
+    {
+        Assert.That(RunHierarchyScenario(0, false, 1), Is.Not.EqualTo(RunHierarchyScenario(0, false, 2)));
+    }
+
+    /// <summary>
+    ///     Transform hierarchies through the real frame loop: a chunk-parallel job spins every local
+    ///     transform, <see cref="TransformPropagationSystem" /> descends the subtrees, and the tree is
+    ///     reshaped between frames. The world transforms must not depend on how the roots were split
+    ///     across workers.
+    /// </summary>
+    private static ulong RunHierarchyScenario(int workers, bool jitter, int seed = 7)
+    {
+        using var engine = new Engine(NullLogger.Instance, new JobScheduler(workers));
+        var world = engine.World;
+        var rng = new Random(seed);
+
+        var nodes = new List<Entity>();
+        var roots = new List<Entity>();
+        for (var r = 0; r < 40; r++)
+        {
+            var root = world.CreateTransform(LocalTransform.FromPosition(new Vector3(r, 0, 0)));
+            roots.Add(root);
+            nodes.Add(root);
+            for (var c = 0; c < 3; c++)
+            {
+                var child = world.CreateTransform(LocalTransform.FromPosition(new Vector3(0, c + 1, 0)));
+                world.SetParent(child, root);
+                nodes.Add(child);
+                for (var g = 0; g < 2; g++)
+                {
+                    var grandchild = world.CreateTransform(LocalTransform.FromPosition(new Vector3(0, 0, g + 1)));
+                    world.SetParent(grandchild, child);
+                    nodes.Add(grandchild);
+                }
+            }
+        }
+
+        engine.AddSystem(PhaseId.Update, new Spin(world.Query().With<LocalTransform>().Build(), jitter));
+
+        var checksums = new List<double>();
+        for (var frame = 0; frame < 20; frame++)
+        {
+            engine.RunFrame(Realtime.FromTicks(frame * 16, 1000));
+
+            // Structural churn between frames, on the main thread, so the shape of the tree is fixed
+            // by the seed and only the propagation of it is left to the pool.
+            if (frame % 4 == 3)
+            {
+                var victim = nodes[rng.Next(nodes.Count)];
+                if (world.IsAlive(victim))
+                {
+                    world.DestroyEntity(victim);
+                }
+            }
+
+            if (frame % 3 == 2)
+            {
+                var child = nodes[rng.Next(nodes.Count)];
+                var parent = roots[rng.Next(roots.Count)];
+                // Only genuine roots are used as the new parent, which rules out closing a cycle.
+                if (child != parent && world.IsAlive(child) && world.IsAlive(parent) && world.GetParent(parent).IsNull)
+                {
+                    world.SetParent(child, parent);
+                }
+            }
+
+            double sum = 0;
+            foreach (var chunk in world.Query().With<WorldTransform>().Build())
+            {
+                foreach (var transform in chunk.GetReadOnlySpan<WorldTransform>())
+                {
+                    var position = transform.Position;
+                    sum += position.X * 0.5 + position.Y * 0.25 + position.Z;
+                }
+            }
+
+            checksums.Add(sum);
+        }
+
+        return HashTransforms(world, checksums);
+    }
+
+    private sealed class Spin(EntityQuery query, bool jitter) : IJobSystem
+    {
+        public void Schedule(in JobSchedulingContext context)
+        {
+            var delta = (float)context.Time.Delta;
+            context.Graph.ScheduleChunks("Spin", query, Access.Write<LocalTransform>(),
+                (in JobContext _, ArchetypeChunk chunk) =>
+                {
+                    Jitter(jitter);
+                    var step = Quaternion.CreateFromAxisAngle(Vector3.UnitY, delta);
+                    foreach (ref var local in chunk.GetSpan<LocalTransform>())
+                    {
+                        local.Rotation = Quaternion.Normalize(local.Rotation * step);
+                    }
+                });
+        }
+    }
+
+    /// <summary>Hashes both the world transforms and the shape of the tree that produced them.</summary>
+    private static ulong HashTransforms(World world, List<double> checksums)
+    {
+        var rows = new List<(int index, int version, Vector3 position, int parent)>();
+        foreach (var chunk in world.Query().With<WorldTransform>().Build())
+        {
+            var entities = chunk.Entities;
+            var transforms = chunk.GetReadOnlySpan<WorldTransform>();
+            for (var i = 0; i < entities.Length; i++)
+            {
+                var parent = world.GetParent(entities[i]);
+                rows.Add((entities[i].Index, entities[i].Version, transforms[i].Position, parent.IsNull ? -1 : parent.Index));
+            }
+        }
+
+        rows.Sort((a, b) => a.index.CompareTo(b.index));
+
+        var hash = 14695981039346656037UL;
+        void Mix(long value)
+        {
+            hash = (hash ^ (ulong)value) * 1099511628211UL;
+        }
+
+        Mix(world.EntityCount);
+        foreach (var row in rows)
+        {
+            Mix(row.index);
+            Mix(row.version);
+            Mix(row.parent);
+            Mix(BitConverter.SingleToInt32Bits(row.position.X));
+            Mix(BitConverter.SingleToInt32Bits(row.position.Y));
+            Mix(BitConverter.SingleToInt32Bits(row.position.Z));
+        }
+
+        foreach (var checksum in checksums)
+        {
+            Mix(BitConverter.DoubleToInt64Bits(checksum));
+        }
+
+        return hash;
     }
 
     private sealed class Attacker(Entity target, bool jitter) : Behaviour

@@ -8,7 +8,9 @@ namespace DivisionEngine;
 ///     in the order they were recorded, so playback order is deterministic by construction.
 ///     <see cref="CreateEntity" /> returns a placeholder (<see cref="Entity.IsDeferred" />) that can
 ///     be used in later commands of the same buffer; it is resolved to a real entity at playback.
-///     Placeholders stored inside component values are not remapped.
+///     Placeholders stored inside an unmanaged component's value are resolved too, for types that
+///     declared their entity fields through <see cref="ComponentTypeRegistry.RegisterEntityFields{T}" />.
+///     Managed component values are never rewritten.
 /// </summary>
 public sealed class EntityCommandBuffer
 {
@@ -70,22 +72,26 @@ public sealed class EntityCommandBuffer
     public void Playback(World world)
     {
         var resolved = _deferredCount == 0 ? [] : new Entity[_deferredCount];
+        var map = new DeferredEntityMap(resolved);
         foreach (var command in _commands)
         {
-            var entity = command.Entity.IsDeferred ? resolved[-1 - command.Entity.Index] : command.Entity;
+            if (command.Kind == CommandKind.CreateEntity)
+            {
+                resolved[-1 - command.Entity.Index] = world.CreateEntity();
+                continue;
+            }
+
+            var entity = map.Resolve(command.Entity);
             switch (command.Kind)
             {
-                case CommandKind.CreateEntity:
-                    resolved[-1 - command.Entity.Index] = world.CreateEntity();
-                    break;
                 case CommandKind.DestroyEntity:
                     world.DestroyEntity(entity);
                     break;
                 case CommandKind.AddComponent:
-                    world.AddComponent(entity, command.Type, Payload(command));
+                    world.AddComponent(entity, command.Type, Remapped(command, map));
                     break;
                 case CommandKind.SetComponent:
-                    world.SetComponent(entity, command.Type, Payload(command));
+                    world.SetComponent(entity, command.Type, Remapped(command, map));
                     break;
                 case CommandKind.RemoveComponent:
                     world.RemoveComponent(entity, command.Type);
@@ -142,9 +148,20 @@ public sealed class EntityCommandBuffer
         _objects.Add(value);
     }
 
-    private ReadOnlySpan<byte> Payload(in Command command)
+    /// <summary>
+    ///     The recorded component value with its entity fields resolved. The rewrite happens in the
+    ///     payload buffer itself, which is valid because playback consumes each command once and
+    ///     clears the buffer afterwards.
+    /// </summary>
+    private ReadOnlySpan<byte> Remapped(in Command command, DeferredEntityMap map)
     {
-        return _payload.AsSpan(command.PayloadOffset, command.PayloadLength);
+        var payload = _payload.AsSpan(command.PayloadOffset, command.PayloadLength);
+        if (_deferredCount > 0 && payload.Length > 0)
+        {
+            ComponentTypeRegistry.RemapEntityFields(command.Type, payload, map);
+        }
+
+        return payload;
     }
 
     private enum CommandKind : byte

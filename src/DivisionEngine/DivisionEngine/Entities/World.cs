@@ -27,6 +27,7 @@ public sealed class World : IDisposable
     private readonly Stack<int> _freeIndices = new();
     private readonly Dictionary<QueryDescription, EntityQuery> _queries = new();
     private readonly Archetype _rootArchetype;
+    private readonly List<IStructuralHook> _structuralHooks = new();
     private bool _disposed;
     private EntityLocation[] _locations = new EntityLocation[256];
     private int _nextIndex;
@@ -106,6 +107,28 @@ public sealed class World : IDisposable
     public void DestroyEntity(Entity entity)
     {
         JobSafety.AssertWrite(ResourceId.Structure);
+        if (_structuralHooks.Count > 0)
+        {
+            ThrowIfDisposed();
+            if (!IsAlive(entity))
+            {
+                throw new EntityNotAliveException(entity);
+            }
+
+            // Hooks may destroy further entities, which can move this one within its chunk, so the
+            // location is only looked up afterwards.
+            // Indexed so that a hook registering another hook does not invalidate the walk.
+            for (var i = 0; i < _structuralHooks.Count; i++)
+            {
+                _structuralHooks[i].OnBeforeDestroy(this, entity);
+            }
+
+            if (!IsAlive(entity))
+            {
+                return;
+            }
+        }
+
         ref var location = ref GetLocation(entity);
         RemoveFromChunk(location.Chunk!, location.Index);
         location = default;
@@ -127,6 +150,30 @@ public sealed class World : IDisposable
     public Archetype GetArchetype(Entity entity)
     {
         return GetLocation(entity).Chunk!.Archetype;
+    }
+
+    // ----------------------------------------------------------------- hooks
+
+    public IReadOnlyList<IStructuralHook> StructuralHooks => _structuralHooks;
+
+    /// <summary>
+    ///     Registers a hook that maintains cross-entity invariants across structural changes.
+    ///     Registering the same hook twice is a no-op, so features can call this lazily when first
+    ///     used rather than requiring the world to be configured up front.
+    /// </summary>
+    public void AddStructuralHook(IStructuralHook hook)
+    {
+        ArgumentNullException.ThrowIfNull(hook);
+        ThrowIfDisposed();
+        if (!_structuralHooks.Contains(hook))
+        {
+            _structuralHooks.Add(hook);
+        }
+    }
+
+    public bool RemoveStructuralHook(IStructuralHook hook)
+    {
+        return _structuralHooks.Remove(hook);
     }
 
     // -------------------------------------------------------------- components

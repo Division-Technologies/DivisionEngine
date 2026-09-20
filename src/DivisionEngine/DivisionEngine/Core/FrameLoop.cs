@@ -29,6 +29,14 @@ public sealed class FrameLoop : SystemGroup
         Extract = AddPhase(new PhaseGroup(PhaseId.Extract, false));
         Render = AddPhase(new PhaseGroup(PhaseId.Render, false, true));
         FrameEnd = AddPhase(new PhaseGroup(PhaseId.FrameEnd, true, true));
+
+        TransformPropagation.Add(new TransformPropagationSystem());
+
+        // "The world transform is settled from LateUpdate on" as an enforced contract
+        // (Notes/Core/LoopSystem.md): local transforms stop changing once propagation starts, and the
+        // world transforms it produces stay put for the rest of the frame.
+        Freeze<LocalTransform>(PhaseId.TransformPropagation, PhaseId.LateUpdate, PhaseId.Extract, PhaseId.Render);
+        Freeze<WorldTransform>(PhaseId.LateUpdate, PhaseId.Extract, PhaseId.Render);
     }
 
     public PhaseGroup FrameBegin { get; }

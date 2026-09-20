@@ -18,6 +18,7 @@ public sealed class Engine : IDisposable
         _logger = logger;
         Scheduler = scheduler ?? JobScheduler.CreateDefault();
         World = new World();
+        World.AddStructuralHook(HierarchyIntegrity.Instance);
         Graph = new JobGraph(Scheduler, World);
         RenderWorld = new RenderWorld();
         Loop = loop ?? new FrameLoop();

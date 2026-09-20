@@ -83,7 +83,12 @@ System レーンと Behaviour レーンの扱いは非対称にする。
 - Behaviour のバッファ書き込みはエラーにせず、コミット時に持ち越して次に許可されるフェーズのコミットで適用する（キー順、そのフェーズ自身の書き込みより先）
 - これにより「Transform の World 値は LateUpdate / Extract で確定している」が API 契約になる。Analyzer で静的に検出できる範囲は検出する
 
-M5 で `FrameLoop.Freeze<T>(phases...)` として実装した。Transform 系の既定設定は M6 で入れる。
+M5 で `FrameLoop.Freeze<T>(phases...)` として実装し、M6 で Transform 系の既定設定を `FrameLoop` のコンストラクタに入れた。凍結範囲が 2 つの型でずれる点に注意する:
+
+| 型 | 凍結するフェーズ | 理由 |
+|---|---|---|
+| `LocalTransform` | TransformPropagation, LateUpdate, Extract, Render | 伝播の入力。伝播が始まった後に書いても、その変更はどのみち次フレームまで反映されない。凍結することで「黙って 1 フレーム古い値が使われる」ではなく「明示的に次フレームへ持ち越す」になる |
+| `WorldTransform` | LateUpdate, Extract, Render | 伝播の**出力**なので、TransformPropagation では書けなければならない。確定するのはその直後から |
 
 ### 構造変更の同期点
 
