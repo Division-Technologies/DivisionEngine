@@ -30,6 +30,10 @@ public sealed class FrameLoop : SystemGroup
         Render = AddPhase(new PhaseGroup(PhaseId.Render, false, true));
         FrameEnd = AddPhase(new PhaseGroup(PhaseId.FrameEnd, true, true));
 
+        // Before anything runs, so a behaviour added last frame — or restored by a scene load or a
+        // script reload — is running by the time the phases that dispatch behaviours come round.
+        FrameBegin.Add(new BehaviourStartSystem());
+
         TransformPropagation.Add(new TransformPropagationSystem());
 
         // "The world transform is settled from LateUpdate on" as an enforced contract

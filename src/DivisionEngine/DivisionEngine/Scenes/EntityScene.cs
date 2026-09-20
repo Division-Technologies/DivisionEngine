@@ -115,8 +115,18 @@ public sealed class EntityScene : ISerializableObject
                 var info = ComponentTypeRegistry.GetInfo(type);
                 if (info.IsManaged)
                 {
-                    throw new EntitySceneException(
-                        $"{info.Type} is a managed component; saving those is not supported yet.");
+                    // Managed components are written by value, not as a reference into a scope: a
+                    // class component belongs to its entity, so a scene stays self-contained and
+                    // applying it twice gives each copy its own instance.
+                    if (world.GetManagedComponent(entity, type) is not ISerializable serializable)
+                    {
+                        throw new EntitySceneException(
+                            $"{info.Type} is a managed component that does not implement ISerializable, so it cannot be saved. "
+                            + "Derive it from SerializableObject and mark it [AutoSerialization].");
+                    }
+
+                    record.Components.Add(new ComponentRecord(info.SerializedTypeId, serializable));
+                    continue;
                 }
 
                 var value = info.Size == 0 ? [] : new byte[info.Size];
@@ -200,13 +210,19 @@ public sealed class EntityScene : ISerializableObject
             foreach (var component in record.Components)
             {
                 var type = Resolve(component.TypeId);
-                var size = ComponentTypeRegistry.GetInfo(type).Size;
-                if (size == 0)
+                var info = ComponentTypeRegistry.GetInfo(type);
+                if (info.IsManaged)
+                {
+                    world.SetManagedComponent(entity, type, component.CloneManaged(info));
+                    continue;
+                }
+
+                if (info.Size == 0)
                 {
                     continue;
                 }
 
-                var value = size <= scratch.Length ? scratch[..size] : new byte[size];
+                var value = info.Size <= scratch.Length ? scratch[..info.Size] : new byte[info.Size];
                 component.Value.AsSpan().CopyTo(value);
                 ComponentTypeRegistry.RemapEntityFields(type, value, map);
                 world.SetComponent(entity, type, value);
@@ -316,13 +332,33 @@ public sealed class EntityScene : ISerializableObject
         }
     }
 
-    private readonly struct ComponentRecord(string typeId, byte[] value)
+    /// <summary>
+    ///     One component of one entity. An unmanaged component is held as the chunk bytes it will be
+    ///     written back as; a managed one is held as a prototype instance that
+    ///     <see cref="EntityScene.ApplyTo" /> copies, so applying a scene twice gives each entity its
+    ///     own object rather than two references to the same one.
+    /// </summary>
+    private readonly struct ComponentRecord
     {
         private const int FieldType = 0;
         private const int FieldValue = 1;
 
-        public string TypeId { get; } = typeId;
-        public byte[] Value { get; } = value;
+        public ComponentRecord(string typeId, byte[] value)
+        {
+            TypeId = typeId;
+            Value = value;
+        }
+
+        public ComponentRecord(string typeId, ISerializable managed)
+        {
+            TypeId = typeId;
+            Value = [];
+            Managed = managed;
+        }
+
+        public string TypeId { get; }
+        public byte[] Value { get; }
+        public ISerializable? Managed { get; }
 
         public void Serialize<TSerializer>(ref TSerializer serializer)
             where TSerializer : ISerializer, allows ref struct
@@ -331,7 +367,15 @@ public sealed class EntityScene : ISerializableObject
             SerializerExtensions.Utf16(ref serializer, FieldType, "type"u8, TypeId);
 
             var info = ComponentTypeRegistry.GetInfo(Resolve(TypeId));
-            if (info.Size > 0)
+            if (Managed is { } managed)
+            {
+                // Inline rather than as an object reference, so the scene file stays readable and
+                // self-contained.
+                serializer.BeginStruct(FieldValue, "value"u8);
+                managed.Serialize(ref serializer);
+                serializer.EndStruct();
+            }
+            else if (info.Size > 0)
             {
                 var writer = info.ValueSerializer ?? throw new EntitySceneException(
                     $"{info.Type} has no registered value serializer. Mark it [Component] and [AutoSerialization].");
@@ -351,18 +395,67 @@ public sealed class EntityScene : ISerializableObject
 
             var typeId = DeserializerExtensions.String(ref deserializer, FieldType, "type"u8);
 
-            // The value is read into this run's layout, which is what makes a changed field list load.
+            // The value is read into this run's shape, which is what makes a changed field list load.
             var info = ComponentTypeRegistry.GetInfo(Resolve(typeId));
-            var value = info.Size == 0 ? [] : new byte[info.Size];
-            if (info.Size > 0)
+            ComponentRecord record;
+            if (info.IsManaged)
             {
-                var reader = info.ValueSerializer ?? throw new EntitySceneException(
-                    $"{info.Type} has no registered value serializer. Mark it [Component] and [AutoSerialization].");
-                reader.Deserialize(ref deserializer, FieldValue, "value"u8, value);
+                var managed = NewManaged(info);
+                if (deserializer.TryBeginStruct(FieldValue, "value"u8))
+                {
+                    managed.Deserialize(ref deserializer);
+                    deserializer.EndStruct();
+                }
+
+                record = new ComponentRecord(typeId, managed);
+            }
+            else
+            {
+                var value = info.Size == 0 ? [] : new byte[info.Size];
+                if (info.Size > 0)
+                {
+                    var reader = info.ValueSerializer ?? throw new EntitySceneException(
+                        $"{info.Type} has no registered value serializer. Mark it [Component] and [AutoSerialization].");
+                    reader.Deserialize(ref deserializer, FieldValue, "value"u8, value);
+                }
+
+                record = new ComponentRecord(typeId, value);
             }
 
             deserializer.EndStruct();
-            return new ComponentRecord(typeId, value);
+            return record;
+        }
+
+        /// <summary>A fresh copy of the prototype, so each application of the scene owns its instance.</summary>
+        public object CloneManaged(ComponentTypeInfo info)
+        {
+            var prototype = Managed ?? throw new InvalidOperationException("Not a managed component.");
+
+            var writer = new ArrayBufferWriter<byte>();
+            var emitter = new Utf8YamlEmitter(writer);
+            var serializer = new YamlSerializer(emitter);
+            serializer.BeginObject(default, info.Type);
+            prototype.Serialize(ref serializer);
+            serializer.EndObject();
+
+            var parser = new YamlParser(new ReadOnlySequence<byte>(writer.WrittenMemory));
+            var deserializer = new YamlDeserializer(parser, NoReferences.Instance);
+            deserializer.TryBeginObject(out _, out _);
+            var clone = NewManaged(info);
+            clone.Deserialize(ref deserializer);
+            return clone;
+        }
+
+        private static ISerializable NewManaged(ComponentTypeInfo info)
+        {
+            if (Activator.CreateInstance(info.Type) is not ISerializable instance)
+            {
+                throw new EntitySceneException(
+                    $"{info.Type} is a managed component that does not implement ISerializable, so it cannot be loaded. "
+                    + "Derive it from SerializableObject and mark it [AutoSerialization].");
+            }
+
+            return instance;
         }
     }
 }

@@ -378,7 +378,17 @@ public sealed class World : IDisposable
 
     public T GetManagedComponent<T>(Entity entity) where T : class
     {
-        var info = ComponentType<T>.Info;
+        return (T)GetManagedComponent(entity, ComponentType<T>.Id);
+    }
+
+    /// <summary>
+    ///     Non-generic form of <see cref="GetManagedComponent{T}" />, for callers that only have a
+    ///     <see cref="ComponentTypeId" /> — saving a scene, for instance, where constructing the
+    ///     closed generic would mean reflecting over the type.
+    /// </summary>
+    public object GetManagedComponent(Entity entity, ComponentTypeId type)
+    {
+        var info = ComponentTypeRegistry.GetInfo(type);
         JobSafety.AssertRead(ResourceId.Component(info.Id));
         ThrowIfNotManaged(info, null);
         ref var location = ref GetLocation(entity);
@@ -388,7 +398,7 @@ public sealed class World : IDisposable
             throw new InvalidOperationException($"{entity} has no {info.Type} component.");
         }
 
-        return (T)location.Chunk.GetManagedArray(slot)[location.Index]!;
+        return location.Chunk.GetManagedArray(slot)[location.Index]!;
     }
 
     public void SetManagedComponent<T>(Entity entity, T value) where T : class

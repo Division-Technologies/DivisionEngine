@@ -8,9 +8,30 @@ namespace DivisionEngine;
 ///     concurrency), segments of different behaviours run in parallel by default.
 ///     Writes are buffered into rounds and committed at the end of the phase (see <see cref="Round" />).
 /// </summary>
-public abstract class Behaviour
+///     <para>
+///         A behaviour is also a managed component: adding one to an entity is what makes it run, and
+///         <see cref="BehaviourStartSystem" /> starts any that is not already running. That is what
+///         lets behaviours come back after a scene load or a script reload — a turn's suspended state
+///         cannot be carried across either, so what is saved is "this entity has this behaviour", and
+///         it starts again from the top. Durable state belongs in ordinary components.
+///     </para>
+///     Serializing contributes nothing by default; a behaviour with fields worth saving marks itself
+///     <c>[AutoSerialization]</c>, whose generated implementation takes over.
+/// </summary>
+public abstract class Behaviour : ISerializable
 {
     public BehaviourContext? Context { get; internal set; }
+
+    /// <summary>True while a turn of this behaviour is running and has not been cancelled.</summary>
+    public bool IsRunning => Context is { IsCancelled: false };
+
+    void ISerializable.Serialize<T>(ref T serializer)
+    {
+    }
+
+    void ISerializable.Deserialize<T>(ref T deserializer)
+    {
+    }
 
     /// <summary>The behaviour's logic. Started by <see cref="JobGraph.Start" /> inside the first segment.</summary>
     protected abstract BehaviourTask Run(BehaviourContext context);
