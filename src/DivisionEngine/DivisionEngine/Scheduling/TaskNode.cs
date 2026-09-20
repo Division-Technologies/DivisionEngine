@@ -32,6 +32,8 @@ public readonly struct JobHandle
 /// </summary>
 internal sealed class TaskNode
 {
+    private static readonly ProfilerZoneSource ExecuteZone = Profiler.DeclareZone("Job");
+
     private readonly Lock _lock = new();
     private readonly JobScheduler _scheduler;
     private List<Chunk>? _chunks;
@@ -151,6 +153,12 @@ internal sealed class TaskNode
 
     public void Execute(int workIndex)
     {
+        // The job's own name is only known at run time, so each distinct name gets its own
+        // interned source location under this call site - otherwise every job would aggregate
+        // into one row in the profiler's statistics. A chunk job opens one zone per batch, which
+        // is what makes the split across workers visible.
+        using var zone = Profiler.ZoneNamed(Name, ExecuteZone);
+
         JobSafety.Enter(Access, Name);
         try
         {

@@ -10,11 +10,21 @@ namespace DivisionEngine;
 /// </summary>
 public sealed class PhaseGroup : SystemGroup
 {
+    private static readonly ProfilerZoneSource PhaseZone = Profiler.DeclareZone("Phase", ProfilerColors.Phase);
+
+    private readonly ProfilerName _frameName;
+    private readonly string _phaseName;
+
     public PhaseGroup(PhaseId phase, bool dispatchesBehaviors, bool mainThreadOnly = false)
     {
         Phase = phase;
         DispatchesBehaviors = dispatchesBehaviors;
         MainThreadOnly = mainThreadOnly;
+
+        // A discontinuous frame per phase: the profiler then plots each phase's duration over
+        // time separately, which is how a phase that occasionally stalls becomes visible.
+        _phaseName = phase.Name;
+        _frameName = Profiler.DeclareName(_phaseName);
     }
 
     public PhaseId Phase { get; }
@@ -32,6 +42,10 @@ public sealed class PhaseGroup : SystemGroup
         var graph = ctx.Graph;
         graph.Time = ctx.ActiveTime;
         graph.Realtime = ctx.Realtime;
+
+        Profiler.FrameMarkStart(_frameName);
+        using var zone = Profiler.ZoneNamed(_phaseName, PhaseZone);
+
         graph.BeginPhase(Phase, DispatchesBehaviors, FrozenTypes);
         try
         {
@@ -44,6 +58,7 @@ public sealed class PhaseGroup : SystemGroup
         finally
         {
             graph.EndPhase();
+            Profiler.FrameMarkEnd(_frameName);
         }
     }
 

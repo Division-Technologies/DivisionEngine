@@ -16,6 +16,16 @@ public sealed class Engine : IDisposable
     public Engine(ILogger logger, JobScheduler? scheduler = null, FrameLoop? loop = null)
     {
         _logger = logger;
+
+        // No-op unless the build defines DIVISION_PROFILING. Idempotent, so several engines in one
+        // process (tests) share one capture. Deliberately not stopped in Dispose: shutting the
+        // profiler down closes the capture, which is the hosting application's call, not an
+        // engine instance's - see Profiler.Shutdown.
+        if (Profiler.IsCompiledIn && !Profiler.Startup())
+        {
+            _logger.LogWarning("Profiling is compiled in but inactive: {Reason}", Profiler.UnavailableReason);
+        }
+
         Scheduler = scheduler ?? JobScheduler.CreateDefault();
         World = new World();
         World.AddStructuralHook(HierarchyIntegrity.Instance);
@@ -147,6 +157,7 @@ public sealed class Engine : IDisposable
         {
             Graph.EndFrame();
             FrameIndex++;
+            Profiler.FrameMark();
         }
     }
 }

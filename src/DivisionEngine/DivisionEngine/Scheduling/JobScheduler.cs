@@ -13,6 +13,11 @@ public sealed class JobScheduler : IDisposable
     [ThreadStatic] private static int _workerIndex; // 0 = not a pool worker (main or foreign thread)
 
     private readonly ConcurrentQueue<(TaskNode node, int work)> _mainQueue = new();
+    // Idle time is the point of instrumenting the pool: a worker that spends the frame asleep on
+    // the semaphore and a worker that spends it running jobs look the same in a wall-clock total.
+    private static readonly ProfilerZoneSource IdleZone = Profiler.DeclareZone("Worker idle", ProfilerColors.Idle);
+    private static readonly ProfilerZoneSource MainIdleZone = Profiler.DeclareZone("Main idle", ProfilerColors.Idle);
+
     private readonly SemaphoreSlim _mainWake = new(0);
     private readonly ConcurrentQueue<(TaskNode node, int work)> _queue = new();
     private readonly CancellationTokenSource _shutdown = new();
@@ -141,6 +146,7 @@ public sealed class JobScheduler : IDisposable
                     continue;
                 }
 
+                using var zone = Profiler.Zone(MainIdleZone);
                 _mainWake.Wait();
             }
         }
@@ -166,6 +172,7 @@ public sealed class JobScheduler : IDisposable
                     continue;
                 }
 
+                using var zone = Profiler.Zone(MainIdleZone);
                 _mainWake.Wait();
             }
         }
@@ -199,15 +206,28 @@ public sealed class JobScheduler : IDisposable
     {
         _workerIndex = index;
         var token = _shutdown.Token;
+        var named = false;
         while (!token.IsCancellationRequested)
         {
             try
             {
-                _signal.Wait(token);
+                using (Profiler.Zone(IdleZone))
+                {
+                    _signal.Wait(token);
+                }
             }
             catch (OperationCanceledException)
             {
                 return;
+            }
+
+            // Named on the first wake rather than at thread start: the pool may well have been
+            // constructed before the profiler was started, and a thread can only be named once
+            // it is known to the profiler.
+            if (!named && Profiler.IsRunning)
+            {
+                Profiler.SetThreadName(Thread.CurrentThread.Name ?? $"Division Worker {index}");
+                named = true;
             }
 
             while (TryRunOne(false))
