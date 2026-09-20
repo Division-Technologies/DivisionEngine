@@ -14,6 +14,42 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
     public ComponentTypeId[] Any { get; }
     public ComponentTypeId[] None { get; }
 
+    /// <summary>
+    ///     Builds a description from explicit type lists, normalizing each so that two descriptions
+    ///     naming the same types compare equal and hit the same cached query. Used by the code
+    ///     generated for <c>[EntityJob]</c>, which knows its types at compile time and so can build
+    ///     the description once into a static field rather than through the fluent builder.
+    /// </summary>
+    public static QueryDescription Create(
+        ReadOnlySpan<ComponentTypeId> all,
+        ReadOnlySpan<ComponentTypeId> any = default,
+        ReadOnlySpan<ComponentTypeId> none = default)
+    {
+        return new QueryDescription(Normalize(all), Normalize(any), Normalize(none));
+    }
+
+    private static ComponentTypeId[] Normalize(ReadOnlySpan<ComponentTypeId> types)
+    {
+        if (types.Length == 0)
+        {
+            return [];
+        }
+
+        var sorted = types.ToArray();
+        Array.Sort(sorted, static (a, b) => a.Value.CompareTo(b.Value));
+
+        var write = 1;
+        for (var read = 1; read < sorted.Length; read++)
+        {
+            if (sorted[read] != sorted[write - 1])
+            {
+                sorted[write++] = sorted[read];
+            }
+        }
+
+        return write == sorted.Length ? sorted : sorted[..write];
+    }
+
     public bool Matches(Archetype archetype)
     {
         foreach (var type in All)
