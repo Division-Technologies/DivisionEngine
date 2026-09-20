@@ -4,6 +4,11 @@ using VYaml.Emitter;
 
 namespace DivisionEngine.Tests.Scenes;
 
+/// <summary>A tag component: no data, but its presence has to survive a scene.</summary>
+[Component]
+[TypeId("aa7c4b93-0e18-4d52-b6f7-8c1902de4400")]
+public struct SceneTag;
+
 /// <summary>
 ///     A world's entities survive a trip through the serialization layer: component values keep their
 ///     fields, and references between entities are rebuilt against the entities of the new world
@@ -171,9 +176,6 @@ public sealed class EntitySceneTests
         serializer.BeginObject(new LocalId(0), typeof(Parent));
         FormatterStore<Parent>.Formatter.Serialize(ref serializer, 0, "p"u8, new Parent { Value = new Entity(3, 1) });
     }
-
-    [Component]
-    private struct SceneTag;
 
     private sealed class SceneLabel
     {
