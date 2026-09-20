@@ -24,9 +24,15 @@ public sealed class JobGraph
     private readonly Dictionary<PhaseId, string[]> _labels = new();
     private readonly List<List<Parked>> _phaseQueues = new();
     private readonly ResourceTracker _tracker = new();
+
+    /// <summary>Every turn started and not yet cancelled, so they can all be stopped at once.</summary>
+    private readonly HashSet<BehaviourContext> _liveTurns = new();
     private int _closedUpTo = -1;
     private bool _closing;
     private PhaseId? _currentPhase;
+
+    /// <summary>Whether the open phase resumes behaviours, i.e. whether a segment may be running.</summary>
+    private bool _currentPhaseDispatches;
     private string[] _currentLabels = [];
     private bool _entryOpen;
     private int _nextTurnId;
@@ -237,6 +243,7 @@ public sealed class JobGraph
 
             _closedUpTo = -1;
             _entryOpen = dispatchBehaviours;
+            _currentPhaseDispatches = dispatchBehaviours;
             // Snapshot the parked list now: turns that park on this phase while it runs (for example a
             // behaviour whose first segment is issued from the intake below) resume at the next occurrence,
             // so what ResumePhase resumes does not depend on how fast segments happen to run.
@@ -309,6 +316,7 @@ public sealed class JobGraph
                 throw new InvalidOperationException("No phase is open.");
             }
 
+            _currentPhaseDispatches = false;
             frozen = _frozen;
         }
 
@@ -419,10 +427,66 @@ public sealed class JobGraph
         behaviour.Context = context;
         lock (_issueLock)
         {
+            _liveTurns.Add(context);
             _intake.Add(new Deferred(context, AccessSet.None, context.RunFirstSegment, null, null));
         }
 
         return context;
+    }
+
+    /// <summary>Turns started and not yet cancelled.</summary>
+    public int LiveTurnCount
+    {
+        get
+        {
+            lock (_issueLock)
+            {
+                return _liveTurns.Count;
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Cancels every running turn and drops the continuations waiting to resume them.
+    ///     <para>
+    ///         A behaviour's suspended state lives in a compiler-generated state machine, which cannot
+    ///         be serialized and, after a script reload, belongs to a type that no longer exists. So a
+    ///         reload stops every turn rather than trying to carry it across; whatever should outlive
+    ///         the reload has to be in a component, and the behaviour is started again from its entry
+    ///         point. Continuations that arrive afterwards — an external await completing late — find
+    ///         their turn cancelled and are dropped.
+    ///     </para>
+    ///     Call between frames, with the graph quiescent (after <see cref="EndFrame" />).
+    /// </summary>
+    /// <returns>How many turns were cancelled.</returns>
+    public int CancelAllTurns()
+    {
+        lock (_issueLock)
+        {
+            if (_currentPhaseDispatches)
+            {
+                throw new InvalidOperationException(
+                    "Turns cannot be cancelled from a phase that dispatches behaviours; one may be mid-segment. "
+                    + "Cancel between frames or from a phase like FrameBegin.");
+            }
+
+            var cancelled = _liveTurns.Count;
+            foreach (var context in _liveTurns)
+            {
+                context.Cancel();
+            }
+
+            _liveTurns.Clear();
+            _intake.Clear();
+            _completedWaiters.Clear();
+            _externalArrivals.Clear();
+            foreach (var queue in _phaseQueues)
+            {
+                queue.Clear();
+            }
+
+            return cancelled;
+        }
     }
 
     /// <summary>
@@ -566,6 +630,13 @@ public sealed class JobGraph
             if (context.InPhase && !context.ContinuedInPhase)
             {
                 LeavePhaseLocked(context);
+            }
+
+            // A turn that has run out or been cancelled is no longer something a reload has to stop;
+            // pruning here keeps the set from growing for the lifetime of the graph.
+            if (context.IsCancelled || context.Task.IsCompleted)
+            {
+                _liveTurns.Remove(context);
             }
         }
     }

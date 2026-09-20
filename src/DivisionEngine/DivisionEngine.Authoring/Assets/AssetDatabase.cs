@@ -314,7 +314,7 @@ public sealed class AssetDatabase : IDisposable
     }
 
     /// <summary>Reloads user assemblies if any changed since the last reload; otherwise a no-op.</summary>
-    public void ReloadScriptsIfDirty(ScriptHost host)
+    public void ReloadScriptsIfDirty(ScriptHost host, IReloadParticipant? participant = null)
     {
         if (!ScriptsDirty)
         {
@@ -322,10 +322,16 @@ public sealed class AssetDatabase : IDisposable
         }
 
         ScriptsDirty = false;
-        ReloadScripts(host, _scriptDlls.Values.ToArray());
+        ReloadScripts(host, _scriptDlls.Values.ToArray(), participant);
     }
 
-    public void ReloadScripts(ScriptHost host, IReadOnlyList<string> dllPaths)
+    /// <param name="participant">
+    ///     State outside the asset graph that must be carried across the swap — the entity world, in
+    ///     practice. It is called around the assembly swap rather than before or after the whole
+    ///     reload, because it has to write itself out while the old types still exist and read itself
+    ///     back once the new ones do.
+    /// </param>
+    public void ReloadScripts(ScriptHost host, IReadOnlyList<string> dllPaths, IReloadParticipant? participant = null)
     {
         // 1. Serialize every materialized scope's current runtime state.
         var saved = new Dictionary<ScopeId, byte[]>();
@@ -346,11 +352,14 @@ public sealed class AssetDatabase : IDisposable
         _scopes.Clear();
         _loaders.Clear();
 
-        // 3. Swap the user assembly context; route all subsequent type resolution through it.
+        // 3. Let anything outside the asset graph save itself and release the old types.
+        participant?.BeforeSwap();
+
+        // 4. Swap the user assembly context; route all subsequent type resolution through it.
         host.Swap(dllPaths);
         _typeResolver = host.TypeResolver;
 
-        // 4. Rebuild the saved scopes from their serialized state, materializing with the new types.
+        // 5. Rebuild the saved scopes from their serialized state, materializing with the new types.
         foreach (var (guid, bytes) in saved)
         {
             var loader = new FileScopeLoader(bytes, _typeResolver);
@@ -372,6 +381,10 @@ public sealed class AssetDatabase : IDisposable
         }
 
         resolver.DrainPending();
+
+        // 6. Now that assets are materialized against the new types, let the participant read itself
+        //    back — it may reference them.
+        participant?.AfterSwap();
     }
 
     private void Reimport(string path, HashSet<ScopeId> visited)
