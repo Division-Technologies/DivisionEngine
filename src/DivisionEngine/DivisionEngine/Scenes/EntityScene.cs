@@ -145,13 +145,33 @@ public sealed class EntityScene : ISerializableObject
         // A scene never holds live handles: after this pass its contents are identical in shape to a
         // freshly loaded one, so capturing and applying without saving in between works too.
         var map = new EntityRemap(toPlaceholder);
-        foreach (var record in scene._entities)
+
+        // Managed components cannot be rewritten at the byte level, so they are copied through the
+        // serializer instead, under a context that reads live handles and writes placeholders.
+        var capture = new EntitySerializationContext();
+        foreach (var (live, placeholder) in toPlaceholder)
         {
-            foreach (var component in record.Components)
+            var id = -1 - placeholder.Index;
+            capture.MapToPersistent(live, id);
+            capture.MapToLive(id, placeholder);
+        }
+
+        using (capture.Enter())
+        {
+            foreach (var record in scene._entities)
             {
-                if (component.Value.Length > 0)
+                for (var i = 0; i < record.Components.Count; i++)
                 {
-                    ComponentTypeRegistry.RemapEntityFields(Resolve(component.TypeId), component.Value, map);
+                    var component = record.Components[i];
+                    var type = Resolve(component.TypeId);
+                    if (component.Managed is not null)
+                    {
+                        record.Components[i] = component.Detached(ComponentTypeRegistry.GetInfo(type));
+                    }
+                    else if (component.Value.Length > 0)
+                    {
+                        ComponentTypeRegistry.RemapEntityFields(type, component.Value, map);
+                    }
                 }
             }
         }
@@ -202,6 +222,18 @@ public sealed class EntityScene : ISerializableObject
         // goes through a scratch copy so the scene keeps its placeholders and can be applied again,
         // which is what instantiating the same scene more than once relies on.
         var map = new EntityRemap(created);
+
+        // The same translation for managed components, which are copied through the serializer:
+        // placeholders on the way out, the entities just created on the way back in.
+        var apply = new EntitySerializationContext();
+        foreach (var record in _entities)
+        {
+            apply.MapToPersistent(EntitySerializationContext.PlaceholderFor(record.Id), record.Id);
+            apply.MapToLive(record.Id, created[record.Id]);
+        }
+
+        using var _ = apply.Enter();
+
         Span<byte> scratch = stackalloc byte[256];
         for (var i = 0; i < _entities.Count; i++)
         {
@@ -426,7 +458,12 @@ public sealed class EntityScene : ISerializableObject
             return record;
         }
 
-        /// <summary>A fresh copy of the prototype, so each application of the scene owns its instance.</summary>
+        /// <summary>
+        ///     A fresh copy of the prototype, so each application of the scene owns its instance, and
+        ///     so its entity fields are rewritten: the copy goes out through the serializer and back,
+        ///     and the ambient <see cref="EntitySerializationContext" /> decides what an entity handle
+        ///     means on each side.
+        /// </summary>
         public object CloneManaged(ComponentTypeInfo info)
         {
             var prototype = Managed ?? throw new InvalidOperationException("Not a managed component.");
@@ -444,6 +481,12 @@ public sealed class EntityScene : ISerializableObject
             var clone = NewManaged(info);
             clone.Deserialize(ref deserializer);
             return clone;
+        }
+
+        /// <summary>The prototype with its live entity handles replaced by the scene's placeholders.</summary>
+        public ComponentRecord Detached(ComponentTypeInfo info)
+        {
+            return new ComponentRecord(TypeId, (ISerializable)CloneManaged(info));
         }
 
         private static ISerializable NewManaged(ComponentTypeInfo info)

@@ -74,13 +74,35 @@ public sealed class EntitySerializationContext
     /// <summary>Declares that <paramref name="entity" /> is persisted as <paramref name="id" />, in both directions.</summary>
     public void Map(Entity entity, int id)
     {
+        MapToPersistent(entity, id);
+        MapToLive(id, entity);
+    }
+
+    /// <summary>
+    ///     Declares only the writing direction. The two directions are separate because copying a
+    ///     managed component reads it under one meaning of "entity" and writes it under another —
+    ///     capturing turns live handles into placeholders, applying turns placeholders into the
+    ///     entities just created.
+    /// </summary>
+    public void MapToPersistent(Entity entity, int id)
+    {
+        ThrowIfReserved(id);
+        _toPersistent[entity] = id;
+    }
+
+    /// <summary>Declares only the reading direction.</summary>
+    public void MapToLive(int id, Entity entity)
+    {
+        ThrowIfReserved(id);
+        _toLive[id] = entity;
+    }
+
+    private static void ThrowIfReserved(int id)
+    {
         if (id == NullId)
         {
             throw new ArgumentOutOfRangeException(nameof(id), $"{NullId} is reserved for the null entity.");
         }
-
-        _toPersistent[entity] = id;
-        _toLive[id] = entity;
     }
 
     /// <summary>
