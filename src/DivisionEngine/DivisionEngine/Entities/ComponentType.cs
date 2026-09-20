@@ -15,34 +15,57 @@ public readonly record struct ComponentTypeId(int Value)
 }
 
 /// <summary>
-///     Resolves the placeholders an <see cref="EntityCommandBuffer" /> handed out to the entities
-///     actually created during playback. Passed to the remappers registered with
-///     <see cref="ComponentTypeRegistry.RegisterEntityFields{T}" />.
+///     Rewrites the entity handles held inside a component value. Passed to the remappers registered
+///     with <see cref="ComponentTypeRegistry.RegisterEntityFields{T}" />.
+///     <para>
+///         Two shapes of the same operation share this type. A <em>deferred</em> map resolves the
+///         placeholders an <see cref="EntityCommandBuffer" /> handed out, or the ones an
+///         <see cref="EntityScene" /> was loaded with, to the entities actually created — indexed, so
+///         it is allocation-free on the hot playback path. A <em>table</em> map translates arbitrary
+///         handles, which is what capturing a scene needs when it replaces live entities with the
+///         placeholders it stores them under.
+///     </para>
 /// </summary>
-public readonly ref struct DeferredEntityMap
+public readonly ref struct EntityRemap
 {
-    private readonly ReadOnlySpan<Entity> _resolved;
+    private readonly ReadOnlySpan<Entity> _byPlaceholderIndex;
+    private readonly IReadOnlyDictionary<Entity, Entity>? _byHandle;
 
-    internal DeferredEntityMap(ReadOnlySpan<Entity> resolved)
+    internal EntityRemap(ReadOnlySpan<Entity> resolved)
     {
-        _resolved = resolved;
+        _byPlaceholderIndex = resolved;
     }
 
-    /// <summary>Returns <paramref name="entity" /> unchanged unless it is a placeholder, in which case the entity it stands for.</summary>
+    internal EntityRemap(IReadOnlyDictionary<Entity, Entity> table)
+    {
+        _byHandle = table;
+    }
+
+    /// <summary>
+    ///     The handle <paramref name="entity" /> should become. A deferred map leaves real handles
+    ///     alone and resolves placeholders; a table map translates whatever it knows and collapses
+    ///     everything else to <see cref="Entity.Null" />, so a reference leaving the captured set
+    ///     becomes explicitly absent rather than a handle that would dangle.
+    /// </summary>
     public Entity Resolve(Entity entity)
     {
+        if (_byHandle is not null)
+        {
+            return entity.IsNull || !_byHandle.TryGetValue(entity, out var mapped) ? Entity.Null : mapped;
+        }
+
         if (!entity.IsDeferred)
         {
             return entity;
         }
 
         var index = -1 - entity.Index;
-        if ((uint)index >= (uint)_resolved.Length)
+        if ((uint)index >= (uint)_byPlaceholderIndex.Length)
         {
-            throw new InvalidOperationException($"{entity} was not created by the command buffer being played back.");
+            throw new InvalidOperationException($"{entity} does not belong to the set being resolved.");
         }
 
-        var resolved = _resolved[index];
+        var resolved = _byPlaceholderIndex[index];
         if (resolved.IsNull)
         {
             throw new InvalidOperationException($"{entity} is used before the command that creates it.");
@@ -57,9 +80,40 @@ public readonly ref struct DeferredEntityMap
 ///     recorded into a command buffer survive playback. Register one per component type that stores
 ///     entities; see <see cref="ComponentTypeRegistry.RegisterEntityFields{T}" />.
 /// </summary>
-public delegate void EntityFieldRemapper<T>(ref T value, DeferredEntityMap map) where T : unmanaged;
+public delegate void EntityFieldRemapper<T>(ref T value, EntityRemap map) where T : unmanaged;
 
-internal delegate void RawEntityFieldRemapper(Span<byte> value, DeferredEntityMap map);
+internal delegate void RawEntityFieldRemapper(Span<byte> value, EntityRemap map);
+
+/// <summary>
+///     Reads and writes one unmanaged component value held as raw chunk bytes, without the caller
+///     knowing the component's type. The methods stay generic over the serializer so the
+///     <c>allows ref struct</c> backends keep their specialized, allocation-free code paths; the
+///     interface itself is non-generic so a <see cref="ComponentTypeId" /> alone is enough to reach it.
+/// </summary>
+public interface IComponentValueSerializer
+{
+    void Serialize<TSerializer>(ref TSerializer serializer, int id, ReadOnlySpan<byte> hintUtf8, ReadOnlySpan<byte> value)
+        where TSerializer : ISerializer, allows ref struct;
+
+    void Deserialize<TDeserializer>(ref TDeserializer deserializer, int id, ReadOnlySpan<byte> hintUtf8, Span<byte> value)
+        where TDeserializer : IDeserializer, allows ref struct;
+}
+
+/// <summary>Bridges <see cref="IComponentValueSerializer" /> to the type's registered <see cref="IValueFormatter{T}" />.</summary>
+internal sealed class ComponentValueSerializer<T> : IComponentValueSerializer where T : unmanaged
+{
+    public void Serialize<TSerializer>(ref TSerializer serializer, int id, ReadOnlySpan<byte> hintUtf8, ReadOnlySpan<byte> value)
+        where TSerializer : ISerializer, allows ref struct
+    {
+        FormatterStore<T>.Formatter.Serialize(ref serializer, id, hintUtf8, in MemoryMarshal.AsRef<T>(value));
+    }
+
+    public void Deserialize<TDeserializer>(ref TDeserializer deserializer, int id, ReadOnlySpan<byte> hintUtf8, Span<byte> value)
+        where TDeserializer : IDeserializer, allows ref struct
+    {
+        MemoryMarshal.AsRef<T>(value) = FormatterStore<T>.Formatter.Deserialize(ref deserializer, id, hintUtf8);
+    }
+}
 
 /// <summary>
 ///     Static description of a component type. Unmanaged components (blittable structs) are stored
@@ -76,6 +130,7 @@ public sealed class ComponentTypeInfo
         Alignment = alignment;
         IsManaged = isManaged;
         IsTag = isTag;
+        SerializedTypeId = DivisionEngine.SerializedTypeId.Get(type);
     }
 
     public ComponentTypeId Id { get; }
@@ -94,6 +149,20 @@ public sealed class ComponentTypeInfo
 
     public bool HasEntityFields => EntityRemapper is not null;
 
+    /// <summary>
+    ///     The type's stable, persisted identity (see <see cref="DivisionEngine.SerializedTypeId" />):
+    ///     the <see cref="TypeIdAttribute" /> GUID when pinned, otherwise a hash of the type name.
+    ///     Unlike <see cref="Id" />, this survives across runs and across assembly reloads.
+    /// </summary>
+    public string SerializedTypeId { get; }
+
+    /// <summary>
+    ///     Reads and writes this component's values field-wise, set by
+    ///     <see cref="ComponentTypeRegistry.RegisterValueSerializer{T}" />. Null for managed and tag
+    ///     components, and for unmanaged components nobody declared as serializable.
+    /// </summary>
+    public IComponentValueSerializer? ValueSerializer { get; internal set; }
+
     public override string ToString()
     {
         return Type.Name;
@@ -108,10 +177,56 @@ public static class ComponentTypeRegistry
 {
     private const int MaxAlignment = 16;
     private static readonly Lock RegistrationLock = new();
+    private static readonly Dictionary<string, ComponentTypeId> BySerializedTypeId = new(StringComparer.Ordinal);
     private static ComponentTypeInfo[] _infos = new ComponentTypeInfo[64];
     private static int _count;
 
     public static int Count => Volatile.Read(ref _count);
+
+    /// <summary>
+    ///     Maps a persisted type id (<see cref="ComponentTypeInfo.SerializedTypeId" />) back to the
+    ///     component type id of this run. Only types already in the registry are found, which is why
+    ///     <see cref="ComponentAttribute" /> exists: it makes the generator register a component as
+    ///     soon as its assembly loads, rather than when some code first mentions it.
+    /// </summary>
+    public static bool TryResolveBySerializedTypeId(string serializedTypeId, out ComponentTypeId id)
+    {
+        ArgumentNullException.ThrowIfNull(serializedTypeId);
+        lock (RegistrationLock)
+        {
+            return BySerializedTypeId.TryGetValue(serializedTypeId, out id);
+        }
+    }
+
+    /// <summary>
+    ///     Brings a component type into the registry. Emitted from a <c>[ModuleInitializer]</c> for
+    ///     every <see cref="ComponentAttribute" /> type, so saved scenes can resolve it by its
+    ///     persisted id before any code has otherwise touched it.
+    /// </summary>
+    public static ComponentTypeId RegisterComponent<T>()
+    {
+        return ComponentType<T>.Id;
+    }
+
+    /// <summary>
+    ///     Declares that <typeparamref name="T" />'s values can be read and written field-wise through
+    ///     its <see cref="IValueFormatter{T}" />, which is what makes a component's data survive a
+    ///     field being added, removed or reordered. Without it, the component is skipped when a scene
+    ///     is saved. Emitted alongside <see cref="RegisterComponent{T}" /> for serializable components.
+    /// </summary>
+    public static void RegisterValueSerializer<T>() where T : unmanaged
+    {
+        var info = GetInfo(ComponentType<T>.Id);
+        if (!info.HasChunkData)
+        {
+            throw new ArgumentException($"{info.Type} has no chunk data to serialize.");
+        }
+
+        lock (RegistrationLock)
+        {
+            info.ValueSerializer ??= new ComponentValueSerializer<T>();
+        }
+    }
 
     public static ComponentTypeInfo GetInfo(ComponentTypeId id)
     {
@@ -147,7 +262,7 @@ public static class ComponentTypeRegistry
     }
 
     /// <summary>Applies the registered remapper, if any, to a component value held as raw bytes.</summary>
-    internal static void RemapEntityFields(ComponentTypeId type, Span<byte> value, DeferredEntityMap map)
+    internal static void RemapEntityFields(ComponentTypeId type, Span<byte> value, EntityRemap map)
     {
         GetInfo(type).EntityRemapper?.Invoke(value, map);
     }
@@ -179,9 +294,19 @@ public static class ComponentTypeRegistry
             }
 
             var id = new ComponentTypeId(index);
-            infos[index] = new ComponentTypeInfo(id, type, size, alignment, isManaged, isTag);
+            var info = new ComponentTypeInfo(id, type, size, alignment, isManaged, isTag);
+            infos[index] = info;
             Volatile.Write(ref _infos, infos);
             Volatile.Write(ref _count, index + 1);
+
+            // Two component types sharing a persisted id would silently load each other's data.
+            if (!BySerializedTypeId.TryAdd(info.SerializedTypeId, id))
+            {
+                var existing = GetInfo(BySerializedTypeId[info.SerializedTypeId]).Type;
+                throw new InvalidOperationException(
+                    $"{type} and {existing} share the serialized type id {info.SerializedTypeId}. Pin one of them with [TypeId].");
+            }
+
             return id;
         }
     }

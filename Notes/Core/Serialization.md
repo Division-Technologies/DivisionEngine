@@ -101,7 +101,7 @@ VYaml ベースの `YamlSerializer` / `YamlDeserializer`。キーはIDの文字�
 
 オブジェクトのフレーミングに書く型識別子は GUID の**安定型ID**（`SerializedTypeId.Get`、"N" 形式 32 桁 hex）。既定は `Type.FullName`（アセンブリ名は含めない。含めるとホットリロードで再コンパイルされたユーザーアセンブリと一致しなくなるため）の MD5 ハッシュ。
 
-クラス名や名前空間を変更したい場合は、変更前に `[TypeId("<GUID>")]` で現在の ID を固定すれば、ソース上に旧名を残さず既存データを壊さずにリネームできる。アナライザ `DIVSER005`（Info）が ID 未固定のシリアライズ対象クラスを検出し、付属の CodeFix（`DivisionEngine.Generators.CodeFixes`）が現在の名前から計算した GUID の `[TypeId]` を自動挿入する。一度付与した ID は変更しない。
+クラス名や名前空間を変更したい場合は、変更前に `[TypeId("<GUID>")]` で現在の ID を固定すれば、ソース上に旧名を残さず既存データを壊さずにリネームできる。`[TypeId]` は M7a で struct にも適用できるようにした（保存されたシーンがコンポーネント struct をこの ID で参照するため。[シーン・エンティティ管理](EntityManagementPlan.md)の M7a を参照）。ただし `[SerializedTypeRegistration]` の生成と `DIVSER005` はクラス限定のままで、struct の ID は実行時の `SerializedTypeId.Get` と `ComponentTypeRegistry` の逆引きが使う。アナライザ `DIVSER005`（Info）が ID 未固定のシリアライズ対象クラスを検出し、付属の CodeFix（`DivisionEngine.Generators.CodeFixes`）が現在の名前から計算した GUID の `[TypeId]` を自動挿入する。一度付与した ID は変更しない。
 
 ハッシュは型名へ逆引きできないため、Source Generator が `ISerializable` を実装する（または `[AutoSerialization]`/`[TypeId]` の付いた）非ジェネリックな全クラスについてアセンブリ属性 `[SerializedTypeRegistration(id, type)]` を生成し、これが ID → 型解決の情報源になる。アセンブリ内の ID 重複はコンパイルエラー（`DIVSER003`）、GUID として不正な ID やジェネリック型への `[TypeId]` もエラー（`DIVSER004`）。ID の既定値計算は Generator（`SerializedTypeGuid`）とランタイム（`SerializedTypeId`）で一致している必要がある。
 
@@ -168,16 +168,14 @@ public interface ISerializationScopeLoader : IDisposable
 1. **pass 1**: `Load` が `Activator.CreateInstance` で空のインスタンスを作り、スコープに登録する
 2. **pass 2**: `Deserialize` がそのインスタンスのフィールドを埋める。参照フィールドは `ISerializedObjectResolver.Resolve(GlobalId)` を通り、未生成なら pass 1 が走ってキューに積まれる
 
-リゾルバ実装（`ObjectManager.Resolver` / オーサリング側の `AssetResolver`）は新規生成されたオブジェクトをキューに積み、現在のオブジェクトのデシリアライズ完了後に `DrainPending` でまとめて pass 2 を実行する。これにより参照の循環があっても無限再帰しない。
+リゾルバ実装（オーサリング側の `AssetResolver`）は新規生成されたオブジェクトをキューに積み、現在のオブジェクトのデシリアライズ完了後に `DrainPending` でまとめて pass 2 を実行する。これにより参照の循環があっても無限再帰しない。
 
 この設計上、**デシリアライズをコンストラクタで行うことはできない**。同じ理由で、アセットの再インポートなど部分的な再読み込みではオブジェクトを作り直さず、既存インスタンスのフィールドだけを更新する（`SerializationScope.Reload`）。これにより他スコープからの参照が生き残る。
 
 ### クラス定義が変わる場合（ホットリロード）
 
-型そのものが差し替わるとインスタンスの再作成が避けられないため、部分的な更新はできない。ロード済みの全スコープをシリアライズし、リロード後にデシリアライズし直すしかない。コア側には次の仕組みがある。
+型そのものが差し替わるとインスタンスの再作成が避けられないため、部分的な更新はできない。ロード済みの全スコープをシリアライズし、リロード後にデシリアライズし直すしかない。
 
-- `SerializationScope(SerializationScope source)`: 同じID構成で新しい型のインスタンス群を作るコピーコンストラクタ
-- `SerializationScope.Transfer`: 旧オブジェクトを YAML にシリアライズし、新オブジェクトへ即座にデシリアライズして状態を移送する
-- `ObjectManager.ReloadClasses`: 全スコープに対して上記を適用した新しい `ObjectManager` を返す
+これを担うのは `AssetDatabase.ReloadScripts` ただ一つで、ライブオブジェクトグラフを所有しているのが `AssetDatabase` のため。詳細は[スクリプティング](Scripting.md#コードのリロード)を参照。
 
-オーサリング環境で実際に行われるリロードは、これをディスク上のスコープファイル経由で行う `AssetDatabase.ReloadScripts` が担当する。詳細は[スクリプティング](Scripting.md#コードのリロード)を参照。
+かつてコア側にも `ObjectManager.ReloadClasses` と、それが使う `SerializationScope` のコピーコンストラクタ・`Transfer` という同じ発想の実装があったが、呼び出し元がないまま複数のバグ（collectible ALC の型を解決できない、バッファを使い回して 2 件目以降が壊れる、オブジェクトのフレーミング欠如、pass 2 の未実行）を抱えていたため M7a で削除した。リロード経路を増やす場合は `AssetDatabase.ReloadScripts` から分岐させる。

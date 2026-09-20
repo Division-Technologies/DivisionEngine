@@ -152,7 +152,7 @@ public sealed class DeferredHierarchyTests
             if (Interlocked.Exchange(ref _registered, 1) == 0)
             {
                 ComponentTypeRegistry.RegisterEntityFields<RegisteredReference>(
-                    static (ref RegisteredReference value, DeferredEntityMap map) => value.Target = map.Resolve(value.Target));
+                    static (ref RegisteredReference value, EntityRemap map) => value.Target = map.Resolve(value.Target));
             }
         }
     }

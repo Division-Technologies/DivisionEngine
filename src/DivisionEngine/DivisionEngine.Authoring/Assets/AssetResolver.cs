@@ -5,9 +5,9 @@ namespace DivisionEngine.Authoring.Assets;
 ///     <see cref="AssetDatabase" />, lazily loading the owning scope (and therefore the referenced
 ///     asset file) on demand.
 ///     <para>
-///         Mirrors the two-pass strategy of <c>ObjectManager.Resolver</c>: when a reference causes a
-///         new object to be materialized, it is queued and deserialized after the current object
-///         finishes, so reference cycles resolve without infinite recursion.
+///         Two-pass by design: when a reference causes a new object to be materialized, it is queued
+///         and deserialized after the current object finishes, so reference cycles resolve without
+///         infinite recursion.
 ///     </para>
 /// </summary>
 internal sealed class AssetResolver(AssetDatabase database) : ISerializedObjectResolver

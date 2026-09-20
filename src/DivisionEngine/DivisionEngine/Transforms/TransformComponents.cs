@@ -8,11 +8,14 @@ namespace DivisionEngine;
 ///     none. Note that <c>default</c> is not the identity (it has a zero scale and a zero
 ///     quaternion); use <see cref="Identity" /> or the <c>From*</c> helpers.
 /// </summary>
-public struct LocalTransform
+[Component]
+[AutoSerialization]
+[TypeId("6f1a2c48-5f6b-4a0e-9a31-0f3d5c7e1b01")]
+public partial struct LocalTransform
 {
-    public Vector3 Position;
-    public Quaternion Rotation;
-    public Vector3 Scale;
+    [Serialize] public Vector3 Position;
+    [Serialize] public Quaternion Rotation;
+    [Serialize] public Vector3 Scale;
 
     public static LocalTransform Identity => new()
     {
@@ -51,9 +54,12 @@ public struct LocalTransform
 ///     during <see cref="PhaseId.TransformPropagation" />. Frozen from <see cref="PhaseId.LateUpdate" />
 ///     through <see cref="PhaseId.Render" />, so readers downstream see a settled value.
 /// </summary>
-public struct WorldTransform
+[Component]
+[AutoSerialization]
+[TypeId("6f1a2c48-5f6b-4a0e-9a31-0f3d5c7e1b02")]
+public partial struct WorldTransform
 {
-    public Matrix4x4 Value;
+    [Serialize] public Matrix4x4 Value;
 
     public readonly Vector3 Position => Value.Translation;
 
@@ -61,9 +67,12 @@ public struct WorldTransform
 }
 
 /// <summary>The entity this one hangs under. Present exactly when the entity is a child.</summary>
-public struct Parent
+[Component]
+[AutoSerialization]
+[TypeId("6f1a2c48-5f6b-4a0e-9a31-0f3d5c7e1b03")]
+public partial struct Parent
 {
-    public Entity Value;
+    [Serialize] public Entity Value;
 }
 
 /// <summary>
@@ -71,44 +80,21 @@ public struct Parent
 ///     least one child; children themselves are chained through <see cref="Sibling" />, in the order
 ///     they were attached.
 /// </summary>
-public struct Child
+[Component]
+[AutoSerialization]
+[TypeId("6f1a2c48-5f6b-4a0e-9a31-0f3d5c7e1b04")]
+public partial struct Child
 {
-    public Entity First;
-    public Entity Last;
+    [Serialize] public Entity First;
+    [Serialize] public Entity Last;
 }
 
 /// <summary>A child's neighbours in its parent's list. Present exactly when <see cref="Parent" /> is.</summary>
-public struct Sibling
+[Component]
+[AutoSerialization]
+[TypeId("6f1a2c48-5f6b-4a0e-9a31-0f3d5c7e1b05")]
+public partial struct Sibling
 {
-    public Entity Next;
-    public Entity Previous;
-}
-
-/// <summary>
-///     Teaches command-buffer playback how to rewrite the entity handles the hierarchy components
-///     hold, so a subtree can be built from placeholders in a single buffer. The generator emits the
-///     equivalent registration for user components (milestone M8).
-/// </summary>
-internal static class HierarchyComponentRegistration
-{
-    [ModuleInitializer]
-    internal static void Register()
-    {
-        ComponentTypeRegistry.RegisterEntityFields<Parent>(static (ref Parent value, DeferredEntityMap map) =>
-        {
-            value.Value = map.Resolve(value.Value);
-        });
-
-        ComponentTypeRegistry.RegisterEntityFields<Child>(static (ref Child value, DeferredEntityMap map) =>
-        {
-            value.First = map.Resolve(value.First);
-            value.Last = map.Resolve(value.Last);
-        });
-
-        ComponentTypeRegistry.RegisterEntityFields<Sibling>(static (ref Sibling value, DeferredEntityMap map) =>
-        {
-            value.Next = map.Resolve(value.Next);
-            value.Previous = map.Resolve(value.Previous);
-        });
-    }
+    [Serialize] public Entity Next;
+    [Serialize] public Entity Previous;
 }

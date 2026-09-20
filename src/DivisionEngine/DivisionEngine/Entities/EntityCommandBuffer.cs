@@ -72,7 +72,7 @@ public sealed class EntityCommandBuffer
     public void Playback(World world)
     {
         var resolved = _deferredCount == 0 ? [] : new Entity[_deferredCount];
-        var map = new DeferredEntityMap(resolved);
+        var map = new EntityRemap(resolved);
         foreach (var command in _commands)
         {
             if (command.Kind == CommandKind.CreateEntity)
@@ -153,7 +153,7 @@ public sealed class EntityCommandBuffer
     ///     payload buffer itself, which is valid because playback consumes each command once and
     ///     clears the buffer afterwards.
     /// </summary>
-    private ReadOnlySpan<byte> Remapped(in Command command, DeferredEntityMap map)
+    private ReadOnlySpan<byte> Remapped(in Command command, EntityRemap map)
     {
         var payload = _payload.AsSpan(command.PayloadOffset, command.PayloadLength);
         if (_deferredCount > 0 && payload.Length > 0)
