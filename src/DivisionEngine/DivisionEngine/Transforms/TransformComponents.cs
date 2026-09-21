@@ -40,12 +40,29 @@ public partial struct LocalTransform
     }
 
     /// <summary>The scale-rotate-translate matrix, in the row-vector convention of <see cref="Matrix4x4" />.</summary>
+    /// <remarks>
+    ///     Written out rather than composed as
+    ///     <c>CreateScale(Scale) * CreateFromQuaternion(Rotation) * CreateTranslation(Position)</c>,
+    ///     which is the same matrix but reaches it through two full 4x4 multiplies - about 230 flops
+    ///     where 30 suffice, since scaling only rescales the rotation's rows and translation only
+    ///     fills the last one. The composed form measured 14.7 ns against 8.4 ns for this one, and
+    ///     the flat propagation path is essentially all <see cref="ToMatrix" /> (100k entities on one
+    ///     thread: 14.1 ns/entity in Propagate_Flat_100k). The two forms agree bit for bit; the
+    ///     tolerance in TransformMathTests exists only to keep the test off floating-point rounding
+    ///     that may differ between instruction sets. See Notes/Core/Profiling.md.
+    /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public readonly Matrix4x4 ToMatrix()
     {
-        return Matrix4x4.CreateScale(Scale)
-               * Matrix4x4.CreateFromQuaternion(Rotation)
-               * Matrix4x4.CreateTranslation(Position);
+        float x = Rotation.X, y = Rotation.Y, z = Rotation.Z, w = Rotation.W;
+        float xx = x * x, yy = y * y, zz = z * z;
+        float xy = x * y, wz = w * z, xz = x * z, wy = w * y, yz = y * z, wx = w * x;
+
+        return new Matrix4x4(
+            Scale.X * (1f - 2f * (yy + zz)), Scale.X * (2f * (xy + wz)), Scale.X * (2f * (xz - wy)), 0f,
+            Scale.Y * (2f * (xy - wz)), Scale.Y * (1f - 2f * (zz + xx)), Scale.Y * (2f * (yz + wx)), 0f,
+            Scale.Z * (2f * (xz + wy)), Scale.Z * (2f * (yz - wx)), Scale.Z * (1f - 2f * (yy + xx)), 0f,
+            Position.X, Position.Y, Position.Z, 1f);
     }
 }
 

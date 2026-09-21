@@ -183,6 +183,51 @@ macOS / Windows / Linux のビルド済みバイナリがあるのでそれを�
 
 未測定。ゾーン 1 つあたり P/Invoke 2 回（begin / end）が乗る。
 
+## 最初に見つかった問題: `LocalTransform.ToMatrix`
+
+計装を入れて最初に出た当たり。`ToMatrix` は
+
+```csharp
+Matrix4x4.CreateScale(Scale) * Matrix4x4.CreateFromQuaternion(Rotation) * Matrix4x4.CreateTranslation(Position)
+```
+
+と書かれていて、**4x4 の積を 2 回**回していた。TRS は回転行列の各行をスケールで割り増しし、
+平行移動を最終行に置くだけで組めるので、約 230 flops のところを約 30 flops で済む。
+
+まず疑われる「SIMD 化されていないのでは」は**外れ**だった。`Matrix4x4` の `*` は BCL 側でベクトル化されており、
+同じ計算を明示スカラーで書いたものと比べて 2.5 倍速い（3.93 ns 対 9.95 ns / 100k 回）。
+実行環境も `AdvSimd.IsSupported` / `Vector128.IsHardwareAccelerated` がいずれも true。
+**問題は SIMD でないことではなく、SIMD で不要な仕事をしていたこと。**
+
+| 100,000 回 | 1 回あたり |
+|---|---|
+| 旧 `ToMatrix()`（行列 3 つを合成） | 14.66 ns |
+| 手書き TRS（普通のスカラー演算） | 8.43 ns |
+| 手書き TRS（明示 `Vector128`） | 7.20 ns |
+
+明示 SIMD 化（-14%）より**演算量を減らすこと（-43%）の方が 3 倍効く**。すでにベクトル化されているので、
+SIMD 化から取れる余地はほとんど残っていない。採ったのは読みやすいスカラー版。
+
+`DivisionEngine.Benchmarks` の `TransformBenchmarks`（10 万エンティティ、`-j Short`、Apple M1）:
+
+| シナリオ | ルート | ワーカー | 変更前 | 変更後 | 変化 |
+|---|---|---|---|---|---|
+| Propagate_Flat_100k | 1000 | 0 | 1,409.3 µs | 924.1 µs | **-34%** |
+| Propagate_Flat_100k | 1000 | 7 | 356.8 µs | 254.5 µs | **-29%** |
+| Propagate_Hierarchy_100k | 1000 | 0 | 8,183.2 µs | 7,413.0 µs | -9.4% |
+| Propagate_Hierarchy_100k | 1000 | 7 | 2,298.0 µs | 2,297.7 µs | ±0% |
+
+効き方の差がそのまま構造を表している。**フラット経路のコストはほぼ全部が `ToMatrix`**
+（変更前 1,409 µs = 14.1 ns/entity は、単体で測った 14.66 ns とほぼ一致する）。
+一方の階層経路は 81.8 ns/entity のうち計算は 17 ns しかなく、残り 83% は
+`PropagateSubtree` がエンティティごとに行う 6〜7 回のランダムアクセスなので、効果は一桁に留まる。
+7 ワーカーの階層が動かないのは、そこが計算ではなく並列化の側で頭打ちになっているため
+（[JobSystem.md](./JobSystem.md) の「細粒度タスクでは並列の方が遅い」と、下記の伝播の並列幅の問題）。
+
+新旧はビット一致する。`Tests/Transforms/TransformMathTests.cs` が
+恒等・鏡映・ゼロスケール・各軸回転・乱数 200 件を旧実装と突き合わせて固定している
+（比較に許容差を置いてあるのは、命令セットが変われば丸め順が変わりうるため。導出を間違えれば桁違いに外れる）。
+
 ## 未解決・今後
 
 - **接続時のコストを測る**。特に Behavior レーン（1 フレーム 5,000 セグメント）でどれだけ観測が結果を歪めるか
