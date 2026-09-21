@@ -115,3 +115,26 @@ public partial struct Sibling
     [Serialize] public Entity Next;
     [Serialize] public Entity Previous;
 }
+
+/// <summary>
+///     Marks an entity, and everything below it, as never moving: <see cref="TransformPropagationSystem" />
+///     neither writes its <see cref="WorldTransform" /> nor descends into it.
+/// </summary>
+/// <remarks>
+///     <para>
+///         The point is to stop <em>visiting</em> the entity, not to skip the arithmetic. Propagation
+///         spends about 83% of its time on the per-entity lookups that walking the hierarchy costs
+///         and only 17% on the transform itself, so a per-entity "has it moved?" flag would save
+///         almost nothing while making the moving part slower (the check is the same random access
+///         that dominates). Excluding a subtree removes both. See Notes/Core/SceneManagement.md.
+///     </para>
+///     <para>
+///         Staticness has to be downward-closed from a root: if an ancestor moved, a skipped subtree
+///         would silently keep a stale <see cref="WorldTransform" />. <c>MakeStatic</c> therefore
+///         refuses an entity whose parent is not itself static, and <c>SetParent</c> refuses to move
+///         a static entity under a moving one.
+///     </para>
+/// </remarks>
+[Component]
+[TypeId("6f1a2c48-5f6b-4a0e-9a31-0f3d5c7e1b06")]
+public partial struct Static;

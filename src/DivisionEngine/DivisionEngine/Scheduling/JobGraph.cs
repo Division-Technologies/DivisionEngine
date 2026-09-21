@@ -124,6 +124,23 @@ public sealed class JobGraph
         return Issue(new TaskNode(Scheduler, name, access, NewContext(), false) { Query = query, ChunkBody = body });
     }
 
+    /// <summary>
+    ///     Schedules <paramref name="body" /> over an index range in parallel batches, for work
+    ///     that is a list rather than a query.
+    /// </summary>
+    /// <param name="itemCount">
+    ///     Read when the node becomes ready rather than when it is issued, so the list may be
+    ///     filled by a job this one is ordered after. Returning 0 completes the node without
+    ///     running anything.
+    /// </param>
+    public JobHandle ScheduleBatches(string name, Func<int> itemCount, AccessSet access, RangeJob body)
+    {
+        ArgumentNullException.ThrowIfNull(itemCount);
+        ArgumentNullException.ThrowIfNull(body);
+        ThrowIfFrozen(name, access);
+        return Issue(new TaskNode(Scheduler, name, access, NewContext(), false) { ItemCount = itemCount, RangeBody = body });
+    }
+
     /// <summary>System-lane writes to a type frozen in the current phase are a configuration error, not something to defer.</summary>
     private void ThrowIfFrozen(string name, AccessSet access)
     {

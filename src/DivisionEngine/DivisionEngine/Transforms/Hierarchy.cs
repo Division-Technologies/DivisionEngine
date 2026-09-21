@@ -1,3 +1,5 @@
+using System.Numerics;
+
 namespace DivisionEngine;
 
 /// <summary>
@@ -93,6 +95,26 @@ public static class Hierarchy
             }
         }
 
+        // Both directions break the rule propagation relies on: that a static subtree hangs only
+        // under a static root, and a moving entity is always reachable from a moving root.
+        var entityStatic = world.HasComponent<Static>(entity);
+        var parentStatic = world.HasComponent<Static>(parent);
+        if (entityStatic && !parentStatic)
+        {
+            throw new InvalidOperationException(
+                $"{entity} is static, so it cannot hang under {parent}, which is not. Propagation skips " +
+                "static subtrees, so one under a moving parent would keep a stale WorldTransform. " +
+                "Make the parent static too, or call MakeDynamic on the entity first.");
+        }
+
+        if (parentStatic && !entityStatic)
+        {
+            throw new InvalidOperationException(
+                $"{parent} is static, so {entity} cannot hang under it while still moving: propagation " +
+                "never descends into a static subtree, and the entity would silently stop updating. " +
+                "Make the entity static too, or call MakeDynamic on the parent first.");
+        }
+
         world.AddStructuralHook(HierarchyIntegrity.Instance);
 
         var current = world.GetParent(entity);
@@ -113,6 +135,79 @@ public static class Hierarchy
         }
 
         Link(world, entity, parent);
+    }
+
+    /// <summary>
+    ///     Settles the subtree's <see cref="WorldTransform" /> values once and then marks it
+    ///     <see cref="Static" />, so propagation stops visiting it. Idempotent.
+    /// </summary>
+    /// <remarks>
+    ///     Refuses an entity whose parent is not static: propagation would then skip a subtree that
+    ///     an ancestor can still move, leaving it holding a stale world transform with nothing to
+    ///     report the mistake. Work from the roots down.
+    /// </remarks>
+    public static void MakeStatic(this World world, Entity entity)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        if (!world.IsAlive(entity))
+        {
+            throw new EntityNotAliveException(entity);
+        }
+
+        var parent = world.GetParent(entity);
+        if (!parent.IsNull && !world.HasComponent<Static>(parent))
+        {
+            throw new InvalidOperationException(
+                $"{entity} cannot be made static while its parent {parent} is not: propagation would " +
+                "skip the subtree even when the parent moves. Make the parent static first.");
+        }
+
+        if (world.HasComponent<Static>(entity))
+        {
+            return;
+        }
+
+        // Settle before marking: once the tag is on, nothing will compute these again.
+        TransformPropagationSystem.PropagateFrom(world, entity, ParentMatrix(world, parent));
+        world.AddComponent<Static>(entity);
+    }
+
+    /// <summary>Removes <see cref="Static" />, so the next propagation picks the subtree up again. Idempotent.</summary>
+    /// <remarks>
+    ///     Refuses an entity under a static parent, which would leave a moving entity inside a
+    ///     subtree propagation never descends into: it would keep a stale world transform with
+    ///     nothing to say so. Thaw from the top.
+    /// </remarks>
+    public static void MakeDynamic(this World world, Entity entity)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        if (!world.HasComponent<Static>(entity))
+        {
+            return;
+        }
+
+        var parent = world.GetParent(entity);
+        if (!parent.IsNull && world.HasComponent<Static>(parent))
+        {
+            throw new InvalidOperationException(
+                $"{entity} cannot be made dynamic while its parent {parent} is static: propagation " +
+                "never reaches inside a static subtree. Make the parent dynamic first.");
+        }
+
+        world.RemoveComponent<Static>(entity);
+    }
+
+    /// <summary>Whether propagation skips this entity and everything under it.</summary>
+    public static bool IsStatic(this World world, Entity entity)
+    {
+        return world.HasComponent<Static>(entity);
+    }
+
+    private static Matrix4x4 ParentMatrix(World world, Entity parent)
+    {
+        return parent.IsNull || !world.HasComponent<WorldTransform>(parent)
+            ? Matrix4x4.Identity
+            : world.GetComponentReadOnly<WorldTransform>(parent).Value;
     }
 
     /// <summary>Detaches the entity from its parent, making it a root. A no-op for entities that are already roots.</summary>

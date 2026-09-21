@@ -10,6 +10,12 @@ public readonly struct JobContext(Time time, Realtime realtime, World world)
 
 public delegate void ChunkJob(in JobContext context, ArchetypeChunk chunk);
 
+/// <summary>
+///     A job body over a half-open slice of an index range, for work that is a runtime-sized list
+///     rather than a query. The slice bounds come from the same batching as chunk jobs.
+/// </summary>
+public delegate void RangeJob(in JobContext context, int start, int end);
+
 /// <summary>Handle to a scheduled job.</summary>
 public readonly struct JobHandle
 {
@@ -38,6 +44,7 @@ internal sealed class TaskNode
     private readonly JobScheduler _scheduler;
     private List<Chunk>? _chunks;
     private int _batchSize;
+    private int _itemCount;
     private volatile bool _completed;
     private volatile bool _hasWaiter;
     private int _pendingDependencies = 1; // issue latch: released once all dependencies are registered
@@ -75,6 +82,13 @@ internal sealed class TaskNode
     public Action<JobContext>? Body { get; init; }
     public ChunkJob? ChunkBody { get; init; }
     public EntityQuery? Query { get; init; }
+    public RangeJob? RangeBody { get; init; }
+
+    /// <summary>
+    ///     How many items <see cref="RangeBody" /> covers. Read when the node becomes ready, not
+    ///     when it is issued, so the count may be produced by a job this one depends on.
+    /// </summary>
+    public Func<int>? ItemCount { get; init; }
 
     public bool IsCompleted => _completed;
 
@@ -134,21 +148,32 @@ internal sealed class TaskNode
     /// </summary>
     private int Prepare()
     {
+        if (RangeBody is not null)
+        {
+            _itemCount = ItemCount!();
+            return Split(_itemCount);
+        }
+
         if (Query is null)
         {
             return 1;
         }
 
         _chunks = Query.CollectChunks(new List<Chunk>());
-        var chunkCount = _chunks.Count;
-        if (chunkCount == 0)
+        return Split(_chunks.Count);
+    }
+
+    /// <summary>Divides <paramref name="count" /> items into batches and returns how many there are.</summary>
+    private int Split(int count)
+    {
+        if (count == 0)
         {
             return 0;
         }
 
-        var batches = Math.Min(chunkCount, Math.Max(1, _scheduler.WorkerCount + 1) * 4);
-        _batchSize = (chunkCount + batches - 1) / batches;
-        return (chunkCount + _batchSize - 1) / _batchSize;
+        var batches = Math.Min(count, Math.Max(1, _scheduler.WorkerCount + 1) * 4);
+        _batchSize = (count + batches - 1) / batches;
+        return (count + _batchSize - 1) / _batchSize;
     }
 
     public void Execute(int workIndex)
@@ -162,7 +187,13 @@ internal sealed class TaskNode
         JobSafety.Enter(Access, Name);
         try
         {
-            if (Query is null)
+            if (RangeBody is not null)
+            {
+                var context = Context;
+                var start = workIndex * _batchSize;
+                RangeBody(in context, start, Math.Min(start + _batchSize, _itemCount));
+            }
+            else if (Query is null)
             {
                 Body!(Context);
             }
