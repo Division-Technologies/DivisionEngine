@@ -20,7 +20,13 @@ public sealed class JobGraph
     private readonly List<ExternalArrival> _externalArrivals = new();
     private HashSet<ComponentTypeId>? _frozen;
     private readonly List<Deferred> _intake = new();
-    private readonly Lock _issueLock = new();
+    /// <summary>
+    ///     Serializes issuing. Profiled rather than a plain <see cref="Lock" /> because it is the
+    ///     prime suspect for why fine-grained segments run slower with more workers: whether the
+    ///     workers are queued behind this or asleep on a semaphore looks the same in a benchmark
+    ///     and different in a capture.
+    /// </summary>
+    private readonly ProfiledLock _issueLock = new("JobGraph issue");
     private readonly Dictionary<PhaseId, string[]> _labels = new();
     private readonly List<List<Parked>> _phaseQueues = new();
     private readonly ResourceTracker _tracker = new();
@@ -78,7 +84,7 @@ public sealed class JobGraph
     {
         get
         {
-            lock (_issueLock)
+            using (_issueLock.EnterScope())
             {
                 return _intake.Count;
             }
@@ -90,7 +96,7 @@ public sealed class JobGraph
     {
         get
         {
-            lock (_issueLock)
+            using (_issueLock.EnterScope())
             {
                 return _externalArrivals.Count;
             }
@@ -195,7 +201,7 @@ public sealed class JobGraph
         }
 
         WaitAll();
-        lock (_issueLock)
+        using (_issueLock.EnterScope())
         {
             _closing = true;
         }
@@ -203,14 +209,14 @@ public sealed class JobGraph
         try
         {
             WaitAll();
-            lock (_issueLock)
+            using (_issueLock.EnterScope())
             {
                 _tracker.Clear();
             }
         }
         finally
         {
-            lock (_issueLock)
+            using (_issueLock.EnterScope())
             {
                 _closing = false;
             }
@@ -235,7 +241,7 @@ public sealed class JobGraph
             throw new ArgumentException("Round labels must be distinct.", nameof(labels));
         }
 
-        lock (_issueLock)
+        using (_issueLock.EnterScope())
         {
             _labels[phase] = labels.ToArray();
         }
@@ -243,7 +249,7 @@ public sealed class JobGraph
 
     public IReadOnlyList<string> GetRounds(PhaseId phase)
     {
-        lock (_issueLock)
+        using (_issueLock.EnterScope())
         {
             return _labels.TryGetValue(phase, out var labels) ? labels : [];
         }
@@ -259,7 +265,7 @@ public sealed class JobGraph
     public void BeginPhase(PhaseId phase, bool dispatchBehaviors = true, IReadOnlyCollection<ComponentTypeId>? frozenTypes = null)
     {
         List<Deferred> deferred;
-        lock (_issueLock)
+        using (_issueLock.EnterScope())
         {
             if (_currentPhase is not null)
             {
@@ -295,7 +301,7 @@ public sealed class JobGraph
     public void ResumePhase(PhaseId phase)
     {
         List<Parked> parked;
-        lock (_issueLock)
+        using (_issueLock.EnterScope())
         {
             if (_currentPhase != phase)
             {
@@ -315,7 +321,7 @@ public sealed class JobGraph
             }
         }
 
-        lock (_issueLock)
+        using (_issueLock.EnterScope())
         {
             _entryOpen = false;
             TryCloseRoundsLocked();
@@ -343,7 +349,7 @@ public sealed class JobGraph
     {
         RoundState[] rounds;
         HashSet<ComponentTypeId>? frozen;
-        lock (_issueLock)
+        using (_issueLock.EnterScope())
         {
             if (_currentPhase is null)
             {
@@ -358,13 +364,13 @@ public sealed class JobGraph
         {
             // Let chains run to quiescence first (bounded by MaxSegmentsPerPhase); only then refuse new issues.
             WaitAll();
-            lock (_issueLock)
+            using (_issueLock.EnterScope())
             {
                 _closing = true;
             }
 
             WaitAll();
-            lock (_issueLock)
+            using (_issueLock.EnterScope())
             {
                 _entryOpen = false;
                 TryCloseRoundsLocked(true);
@@ -376,7 +382,7 @@ public sealed class JobGraph
         }
         finally
         {
-            lock (_issueLock)
+            using (_issueLock.EnterScope())
             {
                 _intake.AddRange(_completedWaiters);
                 _completedWaiters.Clear();
@@ -411,7 +417,7 @@ public sealed class JobGraph
         }
 
         List<BehaviorContext> recorders;
-        lock (_issueLock)
+        using (_issueLock.EnterScope())
         {
             if (_commandRecorders.Count == 0)
             {
@@ -432,7 +438,7 @@ public sealed class JobGraph
     /// <summary>Notes that a turn has something to apply at the end of the phase.</summary>
     internal void OnCommandsRecorded(BehaviorContext context)
     {
-        lock (_issueLock)
+        using (_issueLock.EnterScope())
         {
             if (!_commandRecorders.Contains(context))
             {
@@ -453,7 +459,7 @@ public sealed class JobGraph
     {
         if (expected is null)
         {
-            lock (_issueLock)
+            using (_issueLock.EnterScope())
             {
                 _externalArrivals.Sort(static (a, b) => a.Key.CompareTo(b.Key));
                 var keys = new ExternalKey[_externalArrivals.Count];
@@ -474,7 +480,7 @@ public sealed class JobGraph
         {
             while (true)
             {
-                lock (_issueLock)
+                using (_issueLock.EnterScope())
                 {
                     var index = _externalArrivals.FindIndex(a => a.Key == key);
                     if (index >= 0)
@@ -512,7 +518,7 @@ public sealed class JobGraph
         var context = new BehaviorContext(this, entity, behavior, Interlocked.Increment(ref _nextTurnId),
             name ?? behavior.GetType().Name);
         behavior.Context = context;
-        lock (_issueLock)
+        using (_issueLock.EnterScope())
         {
             _liveTurns.Add(context);
             _intake.Add(new Deferred(context, AccessSet.None, context.RunFirstSegment, null, null));
@@ -526,7 +532,7 @@ public sealed class JobGraph
     {
         get
         {
-            lock (_issueLock)
+            using (_issueLock.EnterScope())
             {
                 return _liveTurns.Count;
             }
@@ -548,7 +554,7 @@ public sealed class JobGraph
     /// <returns>How many turns were cancelled.</returns>
     public int CancelAllTurns()
     {
-        lock (_issueLock)
+        using (_issueLock.EnterScope())
         {
             if (_currentPhaseDispatches)
             {
@@ -588,7 +594,7 @@ public sealed class JobGraph
             Body = _ => context.RunSegment(node, continuation, handle)
         };
 
-        lock (_issueLock)
+        using (_issueLock.EnterScope())
         {
             if (_closing)
             {
@@ -665,7 +671,7 @@ public sealed class JobGraph
     /// <summary>Parks a continuation until <see cref="ResumePhase" /> is called for <paramref name="phase" />.</summary>
     internal void ParkOnPhase(BehaviorContext context, PhaseId phase, Action continuation)
     {
-        lock (_issueLock)
+        using (_issueLock.EnterScope())
         {
             while (_phaseQueues.Count <= phase.Value)
             {
@@ -679,7 +685,7 @@ public sealed class JobGraph
     /// <summary>Parks a completed-round read until the phase has committed; it is issued at the next phase.</summary>
     internal void ParkOnCompleted(BehaviorContext context, AccessSet access, Action continuation, EntityAccess handle)
     {
-        lock (_issueLock)
+        using (_issueLock.EnterScope())
         {
             _completedWaiters.Add(new Deferred(context, access, continuation, handle, null));
         }
@@ -691,7 +697,7 @@ public sealed class JobGraph
     /// </summary>
     internal void EnqueueExternal(BehaviorContext context, int sequence, Action continuation)
     {
-        lock (_issueLock)
+        using (_issueLock.EnterScope())
         {
             _externalArrivals.Add(new ExternalArrival(context, new ExternalKey(context.TurnId, sequence), continuation));
         }
@@ -701,7 +707,7 @@ public sealed class JobGraph
     public void DrainIntake()
     {
         List<Deferred> deferred;
-        lock (_issueLock)
+        using (_issueLock.EnterScope())
         {
             deferred = TakeIntakeLocked();
         }
@@ -712,7 +718,7 @@ public sealed class JobGraph
     /// <summary>Called by a segment when it ends; a turn that did not continue in the phase leaves it.</summary>
     internal void OnSegmentEnded(BehaviorContext context)
     {
-        lock (_issueLock)
+        using (_issueLock.EnterScope())
         {
             if (context.InPhase && !context.ContinuedInPhase)
             {
@@ -732,7 +738,7 @@ public sealed class JobGraph
     internal PendingWrite RecordWrite(BehaviorContext context, Round round, Func<int, PendingWrite> create)
     {
         int index;
-        lock (_issueLock)
+        using (_issueLock.EnterScope())
         {
             if (_currentPhase is null || !context.InPhase)
             {
@@ -770,7 +776,7 @@ public sealed class JobGraph
 
         var buffer = destination.ToArray(); // small: component size
         RoundState[] rounds;
-        lock (_issueLock)
+        using (_issueLock.EnterScope())
         {
             rounds = _rounds;
         }
@@ -797,7 +803,7 @@ public sealed class JobGraph
 
     internal int ResolveRound(Round round)
     {
-        lock (_issueLock)
+        using (_issueLock.EnterScope())
         {
             return ResolveRoundLocked(round);
         }
@@ -807,7 +813,7 @@ public sealed class JobGraph
 
     private JobHandle Issue(TaskNode node)
     {
-        lock (_issueLock)
+        using (_issueLock.EnterScope())
         {
             IssueLocked(node);
         }

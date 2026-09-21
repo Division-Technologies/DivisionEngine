@@ -51,6 +51,8 @@ src/DivisionEngine/DivisionEngine/Profiling/
   Profiler.cs                  エンジンが使う API（ゾーン・フレーム・プロット）
   ProfilerZone.cs              ゾーンハンドルと、名前・テキストの付与
   ProfilerColors.cs            待ちと仕事を見分けるための色
+  ProfiledLock.cs              競合がタイムラインに出るロック
+  MemoryPlots.cs               メモリとアロケーションの毎フレームのプロット
 ```
 
 ### 取り込み方
@@ -308,6 +310,53 @@ FunctionID を受け取れるのはこちらだけで、フックの無いフレ
 [SceneManagement.md](./SceneManagement.md) の「階層経路の 83% はランダムアクセス」と同じものを別の角度から見たもの。
 ジェネリックは実体化ごとに別の FunctionID になるので `ComponentType\`1.get_Info` が複数行に分かれる。
 
+## ロックの可視化
+
+`ProfiledLock` は `System.Threading.Lock` を包み、獲得と解放を Tracy のロックイベントとして出す。
+UI では誰がいつ持っていて誰が後ろに並んでいたかが線で出る。
+
+```csharp
+private readonly ProfiledLock _issueLock = new("JobGraph issue");
+...
+using (_issueLock.EnterScope())
+{
+}
+```
+
+`lock` 文は使えない。`lock` は下の `Lock` を直接取るので、獲得を報告する場所が無い。
+
+ゾーンが仕事 1 単位につき 1 回なのに対し、これは**獲得ごとに**かかるので、
+見る価値のある少数のロックに限って使う。`DIVISION_PROFILING_LOCKS=0` で計装だけ止められる。
+計装が競合を作っている疑いがあるときは、両方で走らせて比べるしかないため。
+
+現在刺してあるのは `JobGraph` の発行ロック 1 本
+（[JobSystem.md](./JobSystem.md) の「細粒度タスクでは並列の方が遅い」の容疑者）。
+5.2 万エンティティの System レーンだけのシーンでは 8 秒で 178 万イベント、
+**競合ゼロ・参加スレッド 1**だった。System レーンの発行はメインスレッドからしか起きないので当然で、
+問題が出るのは Behavior レーン（ワーカーからの動的発行）の側だということがこれで確認できる。
+
+なお、ロックを刺す前に `Monitor.LockContentionCount` の毎フレーム差分を見る方が安い。
+`System.Threading.Lock` もこのカウンタを増やすことは確認済み（競合を作る実験で `Lock` 1,807 / `Monitor` 413）。
+
+## メモリのプロット
+
+`MemoryPlots.Sample()` が `Engine.RunFrame` の末尾で 4 本のプロットを出す。
+
+| プロット | 値 | 取得コスト |
+|---|---|---|
+| Managed heap | `GC.GetTotalMemory(false)` | 289 ns |
+| Managed committed | `GC.GetGCMemoryInfo().TotalCommittedBytes` | 59 ns |
+| Process memory | `Environment.WorkingSet`（RSS） | 587 ns |
+| Allocated per frame | `GC.GetTotalAllocatedBytes(false)` の差分 | 8 ns |
+
+合計で 1 フレームあたり約 950 ns。1.2 ms のフレームに対して 0.08% なので、
+毎フレーム取っている。全て `___tracy_emit_plot_config` でメモリ表示に設定してある
+（確保レートだけステップ表示）。
+
+プロセスメモリを入れてあるのはマネージドヒープが全体の一部でしかないため。
+実測では 52,000 エンティティのシーンで**マネージドヒープ 2.6〜9.0 MB に対し RSS 61〜80 MB**で、
+差はコンポーネントのチャンク、ネイティブライブラリ、ランタイム自身にある。
+
 ## コールスタックサンプリング
 
 **macOS では動いていない。** Tracy 0.14.1 は Apple 向けのサンプラ（mach + フレームポインタ走査、1000 Hz）を
@@ -389,6 +438,12 @@ CORECLR_PROFILER_PATH="$PWD/libDivisionClrProfiler.dylib" \
 | `DIVISION_CLR_DEEP_DEPTH` | 64 | ディープモードでゾーンを開く入れ子の上限 |
 | `DIVISION_CLR_DEEP_EXCLUDE` | `DivisionEngine.Profiler.,DivisionEngine.ProfilerZone.` | ディープモードでフックしない `Type.Method` の前方一致（カンマ区切り、空で除外なし） |
 | `DIVISION_CLR_START_TRACY` | なし | `1` で、エンジンを待たずにプロファイラ側が Tracy クライアントを起動する（ディープモードに必要） |
+
+マネージド側にもひとつある。
+
+| 環境変数 | 既定 | 意味 |
+|---|---|---|
+| `DIVISION_PROFILING_LOCKS` | 有効 | `0` で `ProfiledLock` の計装だけ止める |
 
 CLSID は `CorProfAbi.h` の `kClsidDivisionClrProfiler` と同じもの。
 
@@ -503,8 +558,23 @@ SIMD 化から取れる余地はほとんど残っていない。採ったのは
 
 - **接続時のコストを測る**。特に Behavior レーン（1 フレーム 5,000 セグメント）でどれだけ観測が結果を歪めるか
 - `[SuppressGCTransition]` の可否。ゾーンあたり数 ns 削れるが、スレッド最初の呼び出しは遅延初期化でブロックしうる。抑制したままブロックすると GC を止めるので、測ってから判断する
-- **発行ロックの可視化**。Tracy にはロック可視化の C API（`___tracy_announce_lockable_ctx` ほか）があり、
-  `JobGraph` の発行ロックはまさにその対象。並列時の劣化の原因候補なので次の計装対象
+- **Behavior レーンでのロック計装**。System レーンだけのシーンでは発行ロックに競合が無いことまでは分かったので、
+  次は Behavior のベンチマーク（1 フレーム 5,000 セグメント）を同じ計装で見る
+- **マネージドヒープを Tracy のメモリビューに出す**。結論としては、やるだけの価値が無い。
+  メモリビューは `alloc(ptr, size)` と `free(ptr)` の組を要求するが、
+  マネージド側で確保イベントを取る `COR_PRF_MONITOR_OBJECT_ALLOCATED` は
+  `COR_PRF_ENABLE_OBJECT_ALLOCATED`（起動時固定）と一緒に確保をスローパスへ落とし、サイズは
+  `GetObjectSize2` を 1 オブジェクトごとに呼ぶ必要がある。
+  さらに**解放イベントは存在しない**ので、生存オブジェクトを全部自前で持ち、
+  GC のたびに `SurvivingReferences` / `MovedReferences` で差分を取るしかなく、
+  そのフラグはまた並行 GC を殺す。圧縮でオブジェクトが動けば ptr が変わるので
+  free + alloc の嵐にもなる。測る対象が別物になってしまう。
+  現実的な落とし所は 2 つで、(1) **エンジン自身のアンマネージド確保**
+  （コンポーネントのチャンク、write バッファ、`TaskNode` プール）を名前付きプールとして
+  `___tracy_emit_memory_alloc_named` に載せる。プロットでは分からない断片化と借りっぱなしが見える。
+  (2) LOH だけなら `COR_PRF_HIGH_MONITOR_LARGEOBJECT_ALLOCATED`（高位マスクなので並行 GC は残る）で
+  拾い、gen2 のたびに `___tracy_emit_memory_discard` でプールごと捨てる。
+  「前回の gen2 以降の LOH 確保」という意味になる。どちらも未実装
 - **JIT ゾーンにメソッド名を載せる**。ディープモードのために `IMetaDataImport` の ABI と
   名前解決はもう入っているので、あとは繋ぐだけになった。
   ディープモードが有効なときだけ名前が取れる状態なので、常時に広げるかは未定

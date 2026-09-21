@@ -109,10 +109,42 @@ internal static unsafe partial class TracyNative
     [LibraryImport(Library, EntryPoint = "___tracy_emit_frame_mark_end")]
     internal static partial void FrameMarkEnd(byte* name);
 
+    // ----- locks -----
+    // A lockable is announced once and then reports every acquisition and release, so the profiler
+    // can draw who held it and who was waiting. The context is opaque and lives until terminated.
+
+    [LibraryImport(Library, EntryPoint = "___tracy_announce_lockable_ctx")]
+    internal static partial nint AnnounceLockable(SourceLocation* sourceLocation);
+
+    [LibraryImport(Library, EntryPoint = "___tracy_terminate_lockable_ctx")]
+    internal static partial void TerminateLockable(nint context);
+
+    /// <summary>
+    ///     Called before blocking on the lock. Non-zero means the acquisition must be reported with
+    ///     <see cref="AfterLock" />; zero means nothing is being recorded right now (TRACY_ON_DEMAND)
+    ///     and the matching call must be skipped.
+    /// </summary>
+    [LibraryImport(Library, EntryPoint = "___tracy_before_lock_lockable_ctx")]
+    internal static partial int BeforeLock(nint context);
+
+    [LibraryImport(Library, EntryPoint = "___tracy_after_lock_lockable_ctx")]
+    internal static partial void AfterLock(nint context);
+
+    /// <summary>Called after every release, whether or not the acquisition was reported: it also keeps the held count.</summary>
+    [LibraryImport(Library, EntryPoint = "___tracy_after_unlock_lockable_ctx")]
+    internal static partial void AfterUnlock(nint context);
+
+    [LibraryImport(Library, EntryPoint = "___tracy_after_try_lock_lockable_ctx")]
+    internal static partial void AfterTryLock(nint context, int acquired);
+
     // ----- plots and messages -----
 
     [LibraryImport(Library, EntryPoint = "___tracy_emit_plot")]
     internal static partial void Plot(byte* name, double value);
+
+    /// <summary>Sets how a plot is drawn. The name must be the same pointer the plot is emitted with.</summary>
+    [LibraryImport(Library, EntryPoint = "___tracy_emit_plot_config")]
+    internal static partial void PlotConfig(byte* name, int type, int step, int fill, uint color);
 
     /// <summary>
     ///     A message on the timeline. Named "logString" since 0.14, which replaced the older

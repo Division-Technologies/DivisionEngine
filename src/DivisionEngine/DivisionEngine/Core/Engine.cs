@@ -157,6 +157,7 @@ public sealed class Engine : IDisposable
         {
             Graph.EndFrame();
             FrameIndex++;
+            MemoryPlots.Sample();
             Profiler.FrameMark();
         }
     }

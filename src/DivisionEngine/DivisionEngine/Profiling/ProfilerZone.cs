@@ -33,6 +33,24 @@ public readonly struct ProfilerName
 }
 
 /// <summary>
+///     How a plot's values are drawn and formatted. Mirrors Tracy's <c>TracyPlotFormatEnum</c>.
+/// </summary>
+public enum PlotFormat
+{
+    /// <summary>A plain number.</summary>
+    Number = 0,
+
+    /// <summary>Bytes, shown with a unit.</summary>
+    Memory = 1,
+
+    /// <summary>A percentage.</summary>
+    Percentage = 2,
+
+    /// <summary>Watts.</summary>
+    Watt = 3,
+}
+
+/// <summary>
 ///     A running zone, ended by <see cref="Dispose" />. Obtained from <see cref="Profiler.Zone" />
 ///     and meant to be used as <c>using var zone = Profiler.Zone(Source);</c>.
 /// </summary>

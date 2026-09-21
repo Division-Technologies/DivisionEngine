@@ -47,8 +47,81 @@ public sealed class ProfilerTests
             Profiler.FrameMarkStart(name);
             Profiler.FrameMarkEnd(name);
             Profiler.FrameMark();
+            Profiler.ConfigurePlot(name, PlotFormat.Memory, step: true);
             Profiler.Plot(name, 1.0);
             Profiler.Message("hello");
+
+            var guarded = new ProfiledLock("Test lock");
+            using (guarded.EnterScope())
+            {
+            }
+        });
+    }
+
+    /// <summary>
+    ///     A profiled lock is a lock first. Instrumentation that quietly stopped excluding anyone
+    ///     would be far worse than no instrumentation, and nothing else in the suite would notice.
+    /// </summary>
+    [Test]
+    public void ProfiledLock_StillExcludes()
+    {
+        var guarded = new ProfiledLock("Contended");
+        var counter = 0;
+        var inside = 0;
+        var overlapped = false;
+
+        var threads = new Thread[8];
+        for (var i = 0; i < threads.Length; i++)
+        {
+            threads[i] = new Thread(() =>
+            {
+                for (var iteration = 0; iteration < 20_000; iteration++)
+                {
+                    using (guarded.EnterScope())
+                    {
+                        if (Interlocked.Increment(ref inside) != 1)
+                        {
+                            overlapped = true;
+                        }
+
+                        counter++;
+                        Interlocked.Decrement(ref inside);
+                    }
+                }
+            });
+
+            threads[i].Start();
+        }
+
+        foreach (var thread in threads)
+        {
+            thread.Join();
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(overlapped, Is.False, "two threads were inside the lock at once");
+            Assert.That(counter, Is.EqualTo(threads.Length * 20_000));
+        });
+    }
+
+    /// <summary>
+    ///     Entering is safe before the profiler is up and whether or not lock reporting is on: the
+    ///     announcement is retried rather than attempted once, because locks outlive that decision.
+    /// </summary>
+    [Test]
+    public void ProfiledLock_IsSafe_RegardlessOfBuild()
+    {
+        var guarded = new ProfiledLock("Unannounced");
+
+        Assert.DoesNotThrow(() =>
+        {
+            for (var iteration = 0; iteration < 3; iteration++)
+            {
+                using (guarded.EnterScope())
+                {
+                }
+            }
         });
     }
 

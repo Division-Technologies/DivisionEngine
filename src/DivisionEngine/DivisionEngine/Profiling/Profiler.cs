@@ -39,6 +39,7 @@ public static class Profiler
     private static readonly ConcurrentDictionary<string, nint> Names = new();
     private static readonly ConcurrentDictionary<(nint Site, string Name), nint> ZoneSources = new();
     private static bool _started;
+    private static bool _startedHere;
 #endif
 
     /// <summary>Whether instrumentation is compiled in at all.</summary>
@@ -82,6 +83,18 @@ public static class Profiler
     public static string? UnavailableReason { get; private set; }
 
     /// <summary>
+    ///     Whether <see cref="ProfiledLock" /> reports its acquisitions. On by default in a
+    ///     profiling build; set DIVISION_PROFILING_LOCKS=0 to turn it off.
+    /// </summary>
+    /// <remarks>
+    ///     Unlike a zone, a lock costs on every acquisition rather than once per unit of work, and
+    ///     the issue lock is taken thousands of times a frame. That is precisely what makes it worth
+    ///     looking at, and also what makes it worth being able to switch off: if the instrumentation
+    ///     is suspected of creating the contention it measures, the way to find out is to run both.
+    /// </remarks>
+    public static bool AreLocksVisible { get; private set; }
+
+    /// <summary>
     ///     Starts the profiler. Idempotent. Returns false if profiling is compiled out or the
     ///     native library could not be loaded, leaving <see cref="UnavailableReason" /> set.
     /// </summary>
@@ -101,7 +114,14 @@ public static class Profiler
 
             try
             {
-                TracyNative.StartupProfiler();
+                // Someone else may already have brought the client up - the CLR profiler does, when
+                // it is asked to record a build that has this constant off. Starting it twice
+                // constructs a second client over the first.
+                if (TracyNative.ProfilerStarted() == 0)
+                {
+                    TracyNative.StartupProfiler();
+                    _startedHere = true;
+                }
             }
             catch (DllNotFoundException ex)
             {
@@ -119,6 +139,7 @@ public static class Profiler
             }
 
             UnavailableReason = null;
+            AreLocksVisible = Environment.GetEnvironmentVariable("DIVISION_PROFILING_LOCKS") != "0";
             Volatile.Write(ref _started, true);
             return true;
         }
@@ -140,7 +161,14 @@ public static class Profiler
             }
 
             Volatile.Write(ref _started, false);
-            TracyNative.ShutdownProfiler();
+            AreLocksVisible = false;
+            if (_startedHere)
+            {
+                // Only what this process started here is stopped here: shutting down a client the
+                // CLR profiler brought up would close a capture the engine does not own.
+                _startedHere = false;
+                TracyNative.ShutdownProfiler();
+            }
         }
 #endif
     }
@@ -200,6 +228,79 @@ public static class Profiler
 #else
         _ = name;
         return default;
+#endif
+    }
+
+    /// <summary>
+    ///     Declares a lock's call site. Permanent, like <see cref="DeclareZone" />; build one into a
+    ///     field and hand it to <see cref="ProfiledLock" />.
+    /// </summary>
+    public static ProfilerLockSource DeclareLock(
+        string name,
+        [CallerMemberName] string function = "",
+        [CallerFilePath] string file = "",
+        [CallerLineNumber] int line = 0)
+    {
+#if DIVISION_PROFILING
+        unsafe
+        {
+            var location = (TracyNative.SourceLocation*)NativeMemory.Alloc((nuint)sizeof(TracyNative.SourceLocation));
+            location->Name = AllocUtf8(name);
+            location->Function = AllocUtf8(function);
+            location->File = AllocUtf8(file);
+            location->Line = (uint)line;
+            location->Color = 0;
+            return new ProfilerLockSource((nint)location);
+        }
+#else
+        _ = name;
+        _ = function;
+        _ = file;
+        _ = line;
+        return default;
+#endif
+    }
+
+    /// <summary>
+    ///     Announces a lock to the profiler, returning the context its events are reported against,
+    ///     or 0 if nothing is being recorded. Announcements are deferred by the client, so a lock
+    ///     announced before the UI connects still appears once it does.
+    /// </summary>
+    internal static nint AnnounceLock(in ProfilerLockSource source)
+    {
+#if DIVISION_PROFILING
+        if (!IsRunning || !AreLocksVisible)
+        {
+            return 0;
+        }
+
+        unsafe
+        {
+            return TracyNative.AnnounceLockable((TracyNative.SourceLocation*)source.Handle);
+        }
+#else
+        _ = source;
+        return 0;
+#endif
+    }
+
+    /// <summary>Sets how a plot is drawn. Call once per series, with the name it is emitted with.</summary>
+    public static void ConfigurePlot(in ProfilerName name, PlotFormat format, bool step = false, bool fill = true, uint color = 0)
+    {
+#if DIVISION_PROFILING
+        if (IsRunning)
+        {
+            unsafe
+            {
+                TracyNative.PlotConfig((byte*)name.Handle, (int)format, step ? 1 : 0, fill ? 1 : 0, color);
+            }
+        }
+#else
+        _ = name;
+        _ = format;
+        _ = step;
+        _ = fill;
+        _ = color;
 #endif
     }
 
