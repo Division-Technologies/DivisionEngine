@@ -36,6 +36,21 @@
               CopyToOutputDirectory="PreserveNewest" Link="DivisionTracy.dll"/>
         <None Include="$(DivisionTracyDir)libDivisionTracy.so" Condition="Exists('$(DivisionTracyDir)libDivisionTracy.so')"
               CopyToOutputDirectory="PreserveNewest" Link="libDivisionTracy.so"/>
+
+        <!--
+            The CLR profiler, which reports the runtime's own events (suspensions, GC, JIT) as Tracy
+            zones. Unlike the library above it is never loaded by the engine: the runtime loads it at
+            startup when CORECLR_PROFILER_PATH points at it, so copying it here is what makes that
+            path exist. It has to be loaded out of this directory and no other, because it emits
+            through the DivisionTracy library sitting next to it - loading it from somewhere else
+            would bring a second Tracy client into the process. See Notes/Core/Profiling.md.
+        -->
+        <None Include="$(DivisionTracyDir)libDivisionClrProfiler.dylib" Condition="Exists('$(DivisionTracyDir)libDivisionClrProfiler.dylib')"
+              CopyToOutputDirectory="PreserveNewest" Link="libDivisionClrProfiler.dylib"/>
+        <None Include="$(DivisionTracyDir)DivisionClrProfiler.dll" Condition="Exists('$(DivisionTracyDir)DivisionClrProfiler.dll')"
+              CopyToOutputDirectory="PreserveNewest" Link="DivisionClrProfiler.dll"/>
+        <None Include="$(DivisionTracyDir)libDivisionClrProfiler.so" Condition="Exists('$(DivisionTracyDir)libDivisionClrProfiler.so')"
+              CopyToOutputDirectory="PreserveNewest" Link="libDivisionClrProfiler.so"/>
     </ItemGroup>
 
 </Project>

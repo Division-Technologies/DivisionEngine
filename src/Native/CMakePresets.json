@@ -54,7 +54,7 @@
         "clang-debug"
       ],
       "displayName": "Clang Debug (macOS)",
-      "description": "Configure a Debug build against Homebrew LLVM. The main target is Windows-only and will not build here; build core, test_main and tracy_client instead."
+      "description": "Configure a Debug build against Homebrew LLVM. The main target is Windows-only and will not build here; build core, test_main, tracy_client and clr_profiler instead."
     },
     {
       "name": "macos-clang-release",
@@ -63,7 +63,7 @@
         "clang-release"
       ],
       "displayName": "Clang Release (macOS)",
-      "description": "Configure a Release build against Homebrew LLVM. The main target is Windows-only and will not build here; build core, test_main and tracy_client instead."
+      "description": "Configure a Release build against Homebrew LLVM. The main target is Windows-only and will not build here; build core, test_main, tracy_client and clr_profiler instead."
     }
   ],
   "buildPresets": [
@@ -81,7 +81,8 @@
       "targets": [
         "core",
         "test_main",
-        "tracy_client"
+        "tracy_client",
+        "clr_profiler"
       ]
     },
     {
@@ -90,7 +91,8 @@
       "targets": [
         "core",
         "test_main",
-        "tracy_client"
+        "tracy_client",
+        "clr_profiler"
       ]
     }
   ],

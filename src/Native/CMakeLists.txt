@@ -99,6 +99,9 @@ if(DIVISION_BUILD_TRACY)
   # Our own name for the target, so presets and docs do not depend on upstream's.
   add_custom_target(tracy_client)
   add_dependencies(tracy_client TracyClient)
+
+  # The CLR profiler emits into that same client, so it only exists when Tracy does.
+  add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/clrprofiler)
 endif()
 
 

@@ -40,6 +40,12 @@ NuGet に [Tracy-CSharp](https://github.com/clibequilibrium/Tracy-CSharp) があ
 ```
 src/Native/packages/tracy/     upstream の submodule（v0.14.1 に固定）
   → libDivisionTracy.dylib / DivisionTracy.dll
+src/Native/clrprofiler/        ランタイムのイベントをゾーンにする CLR プロファイラ
+  include/CorProfAbi.h         手書きの最小 ABI（型・イベントマスク・CLSID）
+  include/CorProfSlots.h       vtable のスロット表（生成物）
+  source/ClrProfiler.cpp       COM オブジェクトとコールバック
+  tools/gen_corprof_slots.py   スロット表の生成器
+  → libDivisionClrProfiler.dylib / DivisionClrProfiler.dll
 src/DivisionEngine/DivisionEngine/Profiling/
   TracyNative.cs               LibraryImport による生のエントリポイント
   Profiler.cs                  エンジンが使う API（ゾーン・フレーム・プロット）
@@ -121,6 +127,211 @@ interning 数には上限（1024）を設けてある。ジョブ名は System /
 `JobGraph.Start` は任意の文字列を受け取れるので、エンティティごとに名前を作られると青天井になりうる。
 上限を超えた分は共有 call site + 名前後付けにフォールバックする（タイムライン上の表示は正しいままになる）。
 
+## ランタイムの計装（CLR プロファイラ）
+
+エンジンの計装が見せられるのはエンジンがやっていることだけで、
+**ストップ・ザ・ワールド、GC、JIT はその下でランタイムの都合で走る**。
+[JobSystem.md](./JobSystem.md) の「全スレッド同時のストール」（3 ms 超のジョブが
+スレッド時間の 7%、最長 41 ms、8 スレッドが同時に伸びる）はまさにそれが疑われる場所で、
+エンジン側にどれだけゾーンを足しても原因には届かない。
+
+CLR はこれをプロファイリング API で外に出す。`CORECLR_PROFILER_PATH` が指すネイティブ共有ライブラリを
+マネージドコードより先にロードし、**イベントを起こしたスレッド上で同期的に**コールバックを呼ぶ。
+つまりゾーンをその場で開いて閉じるだけでよく、EventPipe / `EventListener` 経由と違って
+配送の遅延を気にしなくて済む（Tracy の CPU ゾーンは過去時刻に置けないので、この差は決定的）。
+
+### 出るもの
+
+| ゾーン | 由来 | 意味 |
+|---|---|---|
+| `EE suspend: <理由>` | `RuntimeSuspendStarted` → `RuntimeResumeFinished` | ストップ・ザ・ワールド全体。理由は GC / GC prep / rejit / shutdown 等に分かれる |
+| `EE stopped` | `RuntimeSuspendFinished` → `RuntimeResumeStarted` | 全スレッドが実際に止まっていた区間。「止めるのに手間取った」と「止まっていた時間が長い」を分ける |
+| `GC gen0/1/2` | `GarbageCollectionStarted` → `Finished` | 誘発された GC には `induced` のテキストが付く |
+| `JIT` | `JITCompilationStarted` → `Finished` | FunctionID を値として持つ。定常状態に出るものは段階的 JIT の再コンパイル |
+| `Module load` | `ModuleLoadStarted` → `Finished` | モジュール名をテキストに付ける |
+
+色はエンジン側（[ProfilerColors.cs](../../src/DivisionEngine/DivisionEngine/Profiling/ProfilerColors.cs)）が
+青（フェーズ）・橙（Behavior）・くすんだ灰（アイドル）を使っているので、ランタイムには赤系を割り当てた。
+エンジン側のスケジューリングではどうにもならない唯一の区間だから、目に付く方がよい。
+
+### COR_PRF_HIGH_BASIC_GC を使う理由
+
+GC のコールバックは `COR_PRF_MONITOR_GC`（低位マスク）でも取れるが、
+**このフラグはプロセス全体の並行 GC を止める**。測っている対象が変わってしまうので使えない。
+高位マスクの `COR_PRF_HIGH_BASIC_GC`（`SetEventMask2` の第 2 引数）は
+`GarbageCollectionStarted` / `Finished` だけを有効にし、並行 GC はそのまま残る。
+
+4 秒間の確保ループで、観測した GC のうち並行だったものの数:
+
+| マスク | 並行 GC / 観測した GC |
+|---|---|
+| `COR_PRF_MONITOR_GC`（低位 0x80） | **0 / 3,506** |
+| `COR_PRF_HIGH_BASIC_GC`（高位 0x10） | 393 / 3,517 |
+| プロファイラなし | 398 / 3,568 |
+
+高位マスクならプロファイラを付けていない状態とほぼ同じ挙動になる。
+代わりに落ちるのはオブジェクト単位の GC コールバック（`SurvivingReferences` 等）で、これは使っていない。
+
+### ABI の扱い
+
+プロファイラの実体は**COM ランタイムなしの COM**で、
+`ICorProfilerCallback11` と寸分違わぬ vtable を持つオブジェクトを渡す。
+公式の宣言（`corprof.h`）は MIDL の出力で `windows.h` と `ole2.h` を引くため、
+Windows 以外でビルドするにはランタイム自身の PAL 置き換えごと vendoring することになる。
+
+必要なのはもっと小さいので、2 つに分けた。
+
+- **型・イベントマスク・CLSID は手書き**（`CorProfAbi.h`）。`TracyNative.cs` と同じ扱いで、インターフェースではなく ABI 契約
+- **スロット番号だけは生成する**（`CorProfSlots.h`）。ここは推測してはいけない部分で、間違えてもビルドもロードも失敗せず、ランタイムが別の関数を呼ぶだけになる
+
+生成器は `tools/gen_corprof_slots.py` で、dotnet/runtime の `v10.0.0` から `corprof.h` を取り、
+継承の連鎖を平坦化してスロット番号を出す（`ICorProfilerCallback11` は 98 スロット、`ICorProfilerInfo12` は 108）。
+`--check` で既存の生成物と突き合わせられる。実装しないスロットは共通のスタブで埋めてあり、
+引数を読まない以上シグネチャを合わせる必要もない（ただし可変長引数にはしない。
+Apple arm64 では可変長の呼び出し規約が違い、レジスタ渡しの引数を取り落とす）。
+
+### 交差するゾーン
+
+Tracy のゾーンはスレッドごとのスタックなので、開いた順の逆でしか閉じられない。
+ランタイムのイベントは必ずしもそうならない。
+**バックグラウンド gen2 GC はサスペンドの内側で始まり、世界が再開した後も続く**ので、
+`GC gen2` と `EE stopped` は同一スレッド上で本当に交差する。
+
+最初の実装はこれを踏んで、キャプチャが丸ごと拒否された
+（`Instrumentation failure: Invalid order of zone begin and end events`）。
+1 組でも壊れていればトレース全体が無効になるので、運に任せられる話ではない。
+
+今は、交差するゾーンを**いったん閉じて即座に開き直す**。
+BGC は「サスペンド内の区間」「再開処理中の区間」「その後の区間」に分かれて隣接して並び、
+継続分には `continued` のテキストが付く。時間の被覆は正しいまま、スタック規律も守られる。
+8 秒のキャプチャで分割が起きたのは 10 回だった。
+
+同じ理由で、GC ゾーンはスタックとして持っている。
+BGC の進行中にエフェメラルな GC が同じスレッドから報告され、その内側に入れ子になるため。
+
+### ディープモード: マネージドの呼び出しを全部ゾーンにする
+
+`DIVISION_CLR_EVENTS=deep` で、マネージドメソッドの呼び出し 1 回ごとにゾーンが出る
+（Unity の Deep Profiling に相当）。名前は `Type.Method` まで解決される。
+
+遅さは副作用ではなく仕様で、`COR_PRF_MONITOR_ENTERLEAVE` はプロセス全体のインライン化を止め、
+全ての呼び出しと復帰にスタブを挟む。5.2 万エンティティの Transform 階層で測ると
+**1,117 fps が 2 fps**（約 550 倍）になり、4.15 秒のキャプチャで 1,716 万ゾーンが出た。
+常用するものではない。
+
+#### 実験で決まった 3 つのこと
+
+API には同じことをする方法が複数あり、この環境（macOS arm64 / .NET 10）で動くのは 1 つだけだった。
+
+| 方法 | 結果 |
+|---|---|
+| `SetEnterLeaveFunctionHooks3` | 登録は成功しフックも呼ばれるが、**ヒープを壊してプロセスが死ぬ**（無関係な場所で AccessViolation） |
+| `SetEnterLeaveFunctionHooks3WithInfo` | `0x80131374` で拒否される |
+| **`SetEnterLeaveFunctionHooks2`** | 動く。150 万回のフック呼び出しで正常終了 |
+
+`FunctionIDMapper` にも順序の制約がある。**`SetEventMask2` の後に登録するとマッパーの初回呼び出し直後に落ちる**
+（返す値には依存せず、恒等写像でも落ちる）。**マスクより前に登録すれば動く**。
+ENTERLEAVE を有効にした後でマッパーを差し込むのが不整合なのだと思われる。
+
+現在の実装はマッパーを使っていない。名前は **`JITCompilationFinished` で解決して FunctionID をキーに表に入れ**、
+フックはそれを引く。メタデータを読んでよい場所はここだと文書化されており、フックの中から読むのは論外。
+表はロックフリーのオープンアドレス法（書き手は JIT だけ、読み手は全スレッドの全呼び出し）。
+マッパーを使えばクライアント ID に call site ポインタを入れてフックの引きを無くせる（呼び出しあたり 2 回のハッシュ引きが消える）が、
+そのためには名前解決を `JITCompilationStarted` に移し、
+「マッパーはその後に呼ばれる」という文書化されていない順序に依存することになる。
+ディープモードで 1 割速くなる代わりに名前が黙って劣化しうるので、今は採っていない。
+
+この方式には副次的な性質がある。**enter / leave のスタブを出すのは JIT なので、
+事前コンパイル済み（ReadyToRun）のコードにはフックが無く、フックにも届かない**。
+つまりディープモードに映るのはエンジンとユーザーコードで、BCL の内部は映らない。
+実用上はその方が読みやすい。
+
+#### ゾーンを開くメソッドを除外する
+
+最初の実装はエンジン自身の計装と同時に使えなかった。Tracy のゾーンはスレッドごとのスタックなので、
+`Profiler.Zone()` が開いたマネージド側のゾーンと、その `Profiler.Zone` 自身の呼び出しを囲む
+ディープゾーンは**必ず交差する**。`Zone()` から戻る時点で、その中で開いたゾーンがまだ開いているためで、
+1 組でも壊れればキャプチャ全体が無効になる。
+
+規則は単純で、**ゾーンスタックへの正味の影響がゼロでないメソッドはフックしてはいけない**。
+ディープゾーンは入った時に開いて戻る時に閉じるので、既に開いているものの内側にしか入れ子にできない。
+エンジンでは `Profiler.Zone` / `Profiler.ZoneNamed` と `ProfilerZone.Dispose` がそれに当たる
+（`using var zone = ...` の開きと閉じ）。逆に `Zone.Text` や `Plot` はスタックを触らないので問題ない。
+
+除外は `DIVISION_CLR_DEEP_EXCLUDE`（`Type.Method` の前方一致をカンマ区切り）で指定し、
+既定は `DivisionEngine.Profiler.,DivisionEngine.ProfilerZone.`。
+除外されたメソッドは名前の表に番兵として入り、enter / leave / tailcall / 巻き戻しの全てで同じ判定が使われる。
+
+これで**エンジンのゾーンとディープゾーンが 1 つのキャプチャに同居する**。
+5.2 万エンティティ、5.1 秒、1,876 万ゾーンのキャプチャで両方が正しく入れ子になっていることを確認した:
+
+| ゾーン | 出どころ | 件数 |
+|---|---|---|
+| `TransformPropagation` | `TaskNode.cs`（エンジンのジョブ） | 140 |
+| `DivisionEngine.TaskNode.Execute` | ディープ | 140 |
+| `TransformPropagation` | `PhaseGroup.cs`（エンジンのフェーズ） | 7 |
+| `DivisionEngine.Engine.RunFrame` | ディープ | 7 |
+
+エンジンのゾーンが骨格を、ディープゾーンがその中身を見せる形になる。
+
+なお、計装無しのビルド（`-p:DivisionProfiling=true` 無し）に対してディープモードを使うこともできる。
+そのビルドは Tracy クライアントを起動しないので、`DIVISION_CLR_START_TRACY=1` でプロファイラ側に起動させる。
+マネージド側の `Profiler.Startup()` は既に起動済みかを見てから起動するので、二重起動にはならない。
+
+#### 計装されているかは 1 つの表が決める
+
+「このメソッドにフックが付いているか」の答えは、enter・leave・tailcall・例外の巻き戻しの
+4 経路で完全に一致していなければならない。片方だけが push / pop すればそこで壊れる。
+
+そのため名前の表には**名前が読めなかったメソッドも入れる**（総称名で記録する）。
+表にあることが「JIT された = フックがある」を意味し、無ければ何もしない。
+例外の巻き戻しは `ExceptionUnwindFunctionLeave` ではなく `ExceptionUnwindFunctionEnter` で処理している。
+FunctionID を受け取れるのはこちらだけで、フックの無いフレーム（事前コンパイル済み）も巻き戻されるため、
+無条件に pop すると他人のゾーンを閉じてしまう。
+`DynamicMethod` 由来（IL スタブ、ラムダ）はメタデータが無いので
+`DynamicMethodJITCompilationFinished` で総称名を入れている。
+
+#### 最初に出た絵
+
+5.2 万エンティティ、4.15 秒、上位 6 件:
+
+| ゾーン | 件数 | 合計スレッド時間 |
+|---|---|---|
+| `JobSafety.AssertRead` | 3,195,818 | 2.76 s |
+| `World.GetLocation` | 2,568,043 | 11.13 s |
+| `World.IsAlive` | 2,394,801 | 2.20 s |
+| `ComponentTypeRegistry.GetInfo` | 1,205,593 | 1.15 s |
+| `Chunk.GetPointer` | 1,198,073 | 1.12 s |
+| `World.ThrowIfManaged` | 1,197,336 | 1.15 s |
+
+`World.GetLocation` が突出しているのは
+[SceneManagement.md](./SceneManagement.md) の「階層経路の 83% はランダムアクセス」と同じものを別の角度から見たもの。
+ジェネリックは実体化ごとに別の FunctionID になるので `ComponentType\`1.get_Info` が複数行に分かれる。
+
+## コールスタックサンプリング
+
+**macOS では動いていない。** Tracy 0.14.1 は Apple 向けのサンプラ（mach + フレームポインタ走査、1000 Hz）を
+持っていて自動で起動もするが、`TracyMach.cpp` の `SysTraceStart` の冒頭に
+
+```cpp
+if( geteuid() != 0 ) return false;
+```
+
+がある。ユーザーモードのサンプリングに権限は要らないが、
+他プラットフォームの挙動と揃えるためにあえて root を要求する、とコメントに書いてある。
+実際にキャプチャを調べると**サンプル数 0**（`callstack samples: 0`）。
+
+root で走らせれば取れるはずだが未検証。
+
+```sh
+sudo CORECLR_ENABLE_PROFILING=... ./DivisionEngine.Player
+```
+
+ただし取れたとしても**マネージドのフレームは記号化されない**。
+Tracy のクライアントは `dladdr` で名前を引くので、JIT されたコードには何も付かない。
+`DOTNET_PerfMapEnabled` の perf map も Tracy は読まない。
+マネージドのスタックが見たいなら、サンプリングではなく上のディープモードの方が答えになる。
+
 ## 使い方
 
 ### 1. submodule を取得してネイティブをビルドする
@@ -129,6 +340,7 @@ interning 数には上限（1024）を設けてある。ジョブ名は System /
 git submodule update --init --depth 1       # clone 時に --recurse-submodules していれば不要
 cmake --preset macos-clang-release          # 初回のみ（Windows は clang-release）
 cmake --build --preset macos-clang-release --target tracy_client
+cmake --build --preset macos-clang-release --target clr_profiler   # ランタイムの計装も使うなら
 ```
 
 submodule が未取得のまま configure すると、CMake が取得コマンド付きで止まる。
@@ -152,6 +364,44 @@ macOS / Windows / Linux のビルド済みバイナリがあるのでそれを�
 （Homebrew の `tracy` は執筆時点で 0.13.1 で、こちらが固定している 0.14.1 とは繋がらない。）
 
 クライアントは起動時点で TCP 8086 を listen し、UI が接続するまで何も記録しない。
+
+### 4. ランタイムのイベントも見る（任意）
+
+CLR プロファイラはマネージドコードから一切触れないので、環境変数だけで付け外しする。
+
+```sh
+cd src/DivisionEngine/DivisionEngine.Player/bin/Release/net10.0
+CORECLR_ENABLE_PROFILING=1 \
+CORECLR_PROFILER='{9F2C6D1A-4E7B-4F3D-B05A-1C7D8E942A61}' \
+CORECLR_PROFILER_PATH="$PWD/libDivisionClrProfiler.dylib" \
+./DivisionEngine.Player
+```
+
+`CORECLR_PROFILER_PATH` は**マネージドの出力ディレクトリに置かれたコピー**を指さなければならない
+（`-p:DivisionProfiling=true` のビルドがそこへコピーする）。
+プロファイラは隣の `libDivisionTracy` を `@loader_path` で引くので、
+ビルドツリーの方を指すと**プロセス内に Tracy クライアントが 2 つ**できて、接続もデータも割れる。
+
+| 環境変数 | 既定 | 意味 |
+|---|---|---|
+| `DIVISION_CLR_EVENTS` | `suspend,gc,jit` | `suspend` / `gc` / `jit` / `loader` / `deep` / `all` / `none` をカンマ区切りで（`deep` は `all` に含まれない） |
+| `DIVISION_CLR_VERBOSE` | なし | `1` で、付いたことと設定したマスク、ゾーンが分割された回数を stderr に出す |
+| `DIVISION_CLR_DEEP_DEPTH` | 64 | ディープモードでゾーンを開く入れ子の上限 |
+| `DIVISION_CLR_DEEP_EXCLUDE` | `DivisionEngine.Profiler.,DivisionEngine.ProfilerZone.` | ディープモードでフックしない `Type.Method` の前方一致（カンマ区切り、空で除外なし） |
+| `DIVISION_CLR_START_TRACY` | なし | `1` で、エンジンを待たずにプロファイラ側が Tracy クライアントを起動する（ディープモードに必要） |
+
+CLSID は `CorProfAbi.h` の `kClsidDivisionClrProfiler` と同じもの。
+
+エンジンが Tracy を起動していなければ（`-p:DivisionProfiling=true` なしのビルド）、
+プロファイラは付くが何も出さない。Tracy のライフタイムはエンジンが握っている（`TRACY_MANUAL_LIFETIME`）ので、
+こちらからは起動しない。
+
+### 検証の仕方
+
+ランタイムのゾーンは入れ子の規律を破りやすく、破ると**トレース全体が無効になる**。
+変更したら `tracy-capture` でキャプチャを取り、
+`Instrumentation failure: Invalid order of zone begin and end events` が出ないことを確かめる。
+中身は `tracy-csvexport` で見る。
 
 ## 測ったこと
 
@@ -182,6 +432,27 @@ macOS / Windows / Linux のビルド済みバイナリがあるのでそれを�
 ### 接続時のオーバーヘッド
 
 未測定。ゾーン 1 つあたり P/Invoke 2 回（begin / end）が乗る。
+
+### CLR プロファイラを付けたキャプチャ
+
+GC を意図的に回す確保ループ（4 KB × 400 / フレーム、ワークステーション GC）を 8 秒。
+`DIVISION_CLR_EVENTS=all`。
+
+| ゾーン | 件数 | 合計 | 最大 |
+|---|---|---|---|
+| EE stopped | 7,622 | 3.56 s | 3.87 ms |
+| EE suspend: GC | 6,803 | 4.03 s | 4.00 ms |
+| GC gen0 | 4,521 | 288 ms | 0.34 ms |
+| GC gen2 | 1,164 | 1.52 s | 3.44 ms |
+| GC gen1 | 1,121 | 1.44 s | 3.76 ms |
+| EE suspend: GC prep | 819 | 95 ms | 1.95 ms |
+
+`EE suspend` の件数（6,803 + 819）は `EE stopped` の件数と一致する。
+gen2 の合計が gen0 の 5 倍あるのはバックグラウンド GC が並行に走っている時間で、
+止まっていた時間そのものではない（そちらは `EE stopped` が持っている）。
+
+JIT とモジュールロードのゾーンはこの表に出ていない。
+起動の 200 ms ほどで終わってしまい、`TRACY_ON_DEMAND` では UI が繋がるまで何も記録されないため。
 
 ## 最初に見つかった問題: `LocalTransform.ToMatrix`
 
@@ -234,6 +505,13 @@ SIMD 化から取れる余地はほとんど残っていない。採ったのは
 - `[SuppressGCTransition]` の可否。ゾーンあたり数 ns 削れるが、スレッド最初の呼び出しは遅延初期化でブロックしうる。抑制したままブロックすると GC を止めるので、測ってから判断する
 - **発行ロックの可視化**。Tracy にはロック可視化の C API（`___tracy_announce_lockable_ctx` ほか）があり、
   `JobGraph` の発行ロックはまさにその対象。並列時の劣化の原因候補なので次の計装対象
+- **JIT ゾーンにメソッド名を載せる**。ディープモードのために `IMetaDataImport` の ABI と
+  名前解決はもう入っているので、あとは繋ぐだけになった。
+  ディープモードが有効なときだけ名前が取れる状態なので、常時に広げるかは未定
+- **サンプリングを root で試す**。macOS の Tracy サンプラは root を要求する（上記）。
+  取れたとしてマネージドのフレームがどこまで読めるかは未確認
+- **CLR プロファイラのオーバーヘッドを測る**。サスペンドと GC のコールバックだけなら
+  ゾーン 1 つあたり数十 ns のはずだが、未測定
 - Behavior セグメントのゾーン化と、ターン単位の見せ方（fiber を使うかどうか）
 - ワーカーごとのキュー深さ・1 フレームのセグメント数を `Plot` に出す
 - GPU ゾーンはレンダラができてから
