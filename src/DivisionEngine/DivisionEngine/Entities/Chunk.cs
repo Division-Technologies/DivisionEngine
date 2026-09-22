@@ -82,8 +82,8 @@ internal sealed unsafe class Chunk
         }
 
         EntitySlots[to] = EntitySlots[from];
-        var infos = Archetype.Infos;
-        var offsets = Archetype.Offsets;
+        var infos = Archetype.Infos.AsSpan();
+        var offsets = Archetype.Offsets.AsSpan();
         for (var slot = 0; slot < infos.Length; slot++)
         {
             var size = infos[slot].Size;
@@ -109,7 +109,7 @@ internal sealed unsafe class Chunk
         dst.EntitySlots[dstIndex] = src.EntitySlots[srcIndex];
         var dstArchetype = dst.Archetype;
         var srcArchetype = src.Archetype;
-        var infos = dstArchetype.Infos;
+        var infos = dstArchetype.Infos.AsSpan();
         for (var dstSlot = 0; dstSlot < infos.Length; dstSlot++)
         {
             var info = infos[dstSlot];
@@ -145,7 +145,7 @@ internal sealed unsafe class Chunk
     /// <summary>Zeroes every component of the entity at <paramref name="index" /> (slots may hold stale data from a previous occupant).</summary>
     public void ClearData(int index)
     {
-        var infos = Archetype.Infos;
+        var infos = Archetype.Infos.AsSpan();
         for (var slot = 0; slot < infos.Length; slot++)
         {
             var size = infos[slot].Size;

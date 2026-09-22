@@ -445,7 +445,7 @@ public sealed class World : IDisposable
             return archetype;
         }
 
-        archetype = new Archetype(_archetypes.Count, sortedTypes.ToArray());
+        archetype = new Archetype(_archetypes.Count, sortedTypes);
         _archetypesByKey.Add(new ArchetypeKey(archetype.Types), archetype);
         _archetypes.Add(archetype);
         return archetype;

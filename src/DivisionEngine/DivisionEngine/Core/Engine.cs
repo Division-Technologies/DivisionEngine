@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 
 namespace DivisionEngine;
@@ -139,7 +140,7 @@ public sealed class Engine : IDisposable
             externals = Graph.AdmitExternal();
         }
 
-        Recording?.Add(new FrameRecord(realtime, externals));
+        Recording?.Add(new FrameRecord(realtime, ImmutableCollectionsMarshal.AsImmutableArray(externals)));
 
         if (!_frameClock.DoUpdate(realtime, out _time))
         {

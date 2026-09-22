@@ -1,3 +1,6 @@
+using System.Collections.Immutable;
+using System.Runtime.InteropServices;
+
 namespace DivisionEngine;
 
 /// <summary>One entity-level access declaration: a component of one entity.</summary>
@@ -20,23 +23,22 @@ public readonly record struct EntityComponentAccess(Entity Entity, ComponentType
 /// </summary>
 public sealed class AccessSet
 {
-    private readonly EntityComponentAccess[] _entityReads;
-    private readonly EntityComponentAccess[] _entityWrites;
-    private readonly ResourceId[] _reads;
-    private readonly ResourceId[] _writes;
-
-    internal AccessSet(ResourceId[] reads, ResourceId[] writes)
+    internal AccessSet(ImmutableArray<ResourceId> reads, ImmutableArray<ResourceId> writes)
         : this(reads, writes, [], [])
     {
     }
 
-    internal AccessSet(ResourceId[] reads, ResourceId[] writes, EntityComponentAccess[] entityReads, EntityComponentAccess[] entityWrites)
+    internal AccessSet(
+        ImmutableArray<ResourceId> reads,
+        ImmutableArray<ResourceId> writes,
+        ImmutableArray<EntityComponentAccess> entityReads,
+        ImmutableArray<EntityComponentAccess> entityWrites)
     {
-        _reads = reads;
-        _writes = writes;
-        _entityReads = entityReads;
-        _entityWrites = entityWrites;
-        WritesStructure = Array.IndexOf(writes, ResourceId.Structure) >= 0;
+        Reads = reads;
+        Writes = writes;
+        EntityReads = entityReads;
+        EntityWrites = entityWrites;
+        WritesStructure = writes.IndexOf(ResourceId.Structure) >= 0;
     }
 
     /// <summary>Touches nothing. A job with this set may only use its own captured state.</summary>
@@ -50,75 +52,75 @@ public sealed class AccessSet
     public static AccessSet Exclusive { get; } = new([], [ResourceId.Structure]);
 
     /// <summary>Sorted resources read (shared). Does not include resources also written.</summary>
-    public ReadOnlySpan<ResourceId> Reads => _reads;
+    public ImmutableArray<ResourceId> Reads { get; }
 
     /// <summary>Sorted resources written (exclusive).</summary>
-    public ReadOnlySpan<ResourceId> Writes => _writes;
+    public ImmutableArray<ResourceId> Writes { get; }
 
-    public ReadOnlySpan<EntityComponentAccess> EntityReads => _entityReads;
+    public ImmutableArray<EntityComponentAccess> EntityReads { get; }
 
-    public ReadOnlySpan<EntityComponentAccess> EntityWrites => _entityWrites;
+    public ImmutableArray<EntityComponentAccess> EntityWrites { get; }
 
     public bool WritesStructure { get; }
 
-    public bool HasEntityAccess => _entityReads.Length > 0 || _entityWrites.Length > 0;
+    public bool HasEntityAccess => EntityReads.Length > 0 || EntityWrites.Length > 0;
 
     public bool CanRead(ResourceId resource)
     {
-        return WritesStructure || Contains(_writes, resource) || Contains(_reads, resource);
+        return WritesStructure || Contains(Writes, resource) || Contains(Reads, resource);
     }
 
     public bool CanWrite(ResourceId resource)
     {
-        return WritesStructure || Contains(_writes, resource);
+        return WritesStructure || Contains(Writes, resource);
     }
 
     public bool CanReadEntity(Entity entity, ComponentTypeId type)
     {
         return CanRead(ResourceId.Component(type))
-               || Contains(_entityWrites, new EntityComponentAccess(entity, type))
-               || Contains(_entityReads, new EntityComponentAccess(entity, type));
+               || Contains(EntityWrites, new EntityComponentAccess(entity, type))
+               || Contains(EntityReads, new EntityComponentAccess(entity, type));
     }
 
     public bool CanWriteEntity(Entity entity, ComponentTypeId type)
     {
-        return CanWrite(ResourceId.Component(type)) || Contains(_entityWrites, new EntityComponentAccess(entity, type));
+        return CanWrite(ResourceId.Component(type)) || Contains(EntityWrites, new EntityComponentAccess(entity, type));
     }
 
     public override string ToString()
     {
         var parts = new List<string>();
-        if (_reads.Length > 0)
+        if (Reads.Length > 0)
         {
-            parts.Add($"reads[{string.Join(", ", _reads)}]");
+            parts.Add($"reads[{string.Join(", ", Reads)}]");
         }
 
-        if (_writes.Length > 0)
+        if (Writes.Length > 0)
         {
-            parts.Add($"writes[{string.Join(", ", _writes)}]");
+            parts.Add($"writes[{string.Join(", ", Writes)}]");
         }
 
-        if (_entityReads.Length > 0)
+        if (EntityReads.Length > 0)
         {
-            parts.Add($"entity-reads[{string.Join(", ", _entityReads)}]");
+            parts.Add($"entity-reads[{string.Join(", ", EntityReads)}]");
         }
 
-        if (_entityWrites.Length > 0)
+        if (EntityWrites.Length > 0)
         {
-            parts.Add($"entity-writes[{string.Join(", ", _entityWrites)}]");
+            parts.Add($"entity-writes[{string.Join(", ", EntityWrites)}]");
         }
 
         return parts.Count == 0 ? "none" : string.Join(" ", parts);
     }
 
-    private static bool Contains(ResourceId[] sorted, ResourceId resource)
+    private static bool Contains(ImmutableArray<ResourceId> sorted, ResourceId resource)
     {
-        return Array.BinarySearch(sorted, resource, ResourceComparer.Instance) >= 0;
+        return ImmutableArray.BinarySearch(sorted, resource, ResourceComparer.Instance) >= 0;
     }
 
-    private static bool Contains(EntityComponentAccess[] sorted, EntityComponentAccess access)
+    private static bool Contains(ImmutableArray<EntityComponentAccess> sorted, EntityComponentAccess access)
     {
-        return Array.BinarySearch(sorted, access, EntityAccessComparer.Instance) >= 0;
+        return ImmutableArray.BinarySearch(sorted, access, EntityAccessComparer.Instance) >= 0;
     }
 
     internal sealed class ResourceComparer : IComparer<ResourceId>
@@ -232,7 +234,11 @@ public struct AccessSetBuilder
             entityReads = Except(entityReads, entityWrites, AccessSet.EntityAccessComparer.Instance);
         }
 
-        return new AccessSet(reads, writes, entityReads, entityWrites);
+        return new AccessSet(
+            ImmutableCollectionsMarshal.AsImmutableArray(reads),
+            ImmutableCollectionsMarshal.AsImmutableArray(writes),
+            ImmutableCollectionsMarshal.AsImmutableArray(entityReads),
+            ImmutableCollectionsMarshal.AsImmutableArray(entityWrites));
     }
 
     public static implicit operator AccessSet(AccessSetBuilder builder)

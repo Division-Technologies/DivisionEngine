@@ -1,3 +1,6 @@
+using System.Collections.Immutable;
+using System.Runtime.InteropServices;
+
 namespace DivisionEngine;
 
 /// <summary>
@@ -40,19 +43,19 @@ public sealed class EntityJobAttribute : Attribute;
 [AttributeUsage(AttributeTargets.Struct, AllowMultiple = true)]
 public sealed class WithAllAttribute(params Type[] types) : Attribute
 {
-    public Type[] Types { get; } = types;
+    public ImmutableArray<Type> Types { get; } = ImmutableCollectionsMarshal.AsImmutableArray(types);
 }
 
 /// <summary>Components an entity must have at least one of.</summary>
 [AttributeUsage(AttributeTargets.Struct, AllowMultiple = true)]
 public sealed class WithAnyAttribute(params Type[] types) : Attribute
 {
-    public Type[] Types { get; } = types;
+    public ImmutableArray<Type> Types { get; } = ImmutableCollectionsMarshal.AsImmutableArray(types);
 }
 
 /// <summary>Components that exclude an entity from the job.</summary>
 [AttributeUsage(AttributeTargets.Struct, AllowMultiple = true)]
 public sealed class WithNoneAttribute(params Type[] types) : Attribute
 {
-    public Type[] Types { get; } = types;
+    public ImmutableArray<Type> Types { get; } = ImmutableCollectionsMarshal.AsImmutableArray(types);
 }

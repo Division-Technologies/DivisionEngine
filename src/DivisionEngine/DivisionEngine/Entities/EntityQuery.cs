@@ -1,18 +1,24 @@
+using System.Collections.Immutable;
+using System.Runtime.InteropServices;
+
 namespace DivisionEngine;
 
 /// <summary>Which archetypes a query matches: all of <see cref="All" />, none of <see cref="None" />, and (if non-empty) at least one of <see cref="Any" />.</summary>
 public readonly struct QueryDescription : IEquatable<QueryDescription>
 {
-    internal QueryDescription(ComponentTypeId[] all, ComponentTypeId[] any, ComponentTypeId[] none)
+    internal QueryDescription(
+        ImmutableArray<ComponentTypeId> all,
+        ImmutableArray<ComponentTypeId> any,
+        ImmutableArray<ComponentTypeId> none)
     {
         All = all;
         Any = any;
         None = none;
     }
 
-    public ComponentTypeId[] All { get; }
-    public ComponentTypeId[] Any { get; }
-    public ComponentTypeId[] None { get; }
+    public ImmutableArray<ComponentTypeId> All { get; }
+    public ImmutableArray<ComponentTypeId> Any { get; }
+    public ImmutableArray<ComponentTypeId> None { get; }
 
     /// <summary>
     ///     Builds a description from explicit type lists, normalizing each so that two descriptions
@@ -28,7 +34,7 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
         return new QueryDescription(Normalize(all), Normalize(any), Normalize(none));
     }
 
-    private static ComponentTypeId[] Normalize(ReadOnlySpan<ComponentTypeId> types)
+    private static ImmutableArray<ComponentTypeId> Normalize(ReadOnlySpan<ComponentTypeId> types)
     {
         if (types.Length == 0)
         {
@@ -47,7 +53,7 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
             }
         }
 
-        return write == sorted.Length ? sorted : sorted[..write];
+        return ImmutableCollectionsMarshal.AsImmutableArray(write == sorted.Length ? sorted : sorted[..write]);
     }
 
     public bool Matches(Archetype archetype)
@@ -86,9 +92,9 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
 
     public bool Equals(QueryDescription other)
     {
-        return All.AsSpan().SequenceEqual(other.All)
-               && Any.AsSpan().SequenceEqual(other.Any)
-               && None.AsSpan().SequenceEqual(other.None);
+        return All.AsSpan().SequenceEqual(other.All.AsSpan())
+               && Any.AsSpan().SequenceEqual(other.Any.AsSpan())
+               && None.AsSpan().SequenceEqual(other.None.AsSpan());
     }
 
     public override bool Equals(object? obj)
@@ -98,7 +104,7 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
 
     public override int GetHashCode()
     {
-        return HashCode.Combine(ArchetypeKey.Hash(All), ArchetypeKey.Hash(Any), ArchetypeKey.Hash(None));
+        return HashCode.Combine(ArchetypeKey.Hash(All.AsSpan()), ArchetypeKey.Hash(Any.AsSpan()), ArchetypeKey.Hash(None.AsSpan()));
     }
 }
 
@@ -138,14 +144,14 @@ public struct QueryBuilder
         return _world.GetQuery(new QueryDescription(Normalize(_all), Normalize(_any), Normalize(_none)));
     }
 
-    private static ComponentTypeId[] Normalize(List<ComponentTypeId>? types)
+    private static ImmutableArray<ComponentTypeId> Normalize(List<ComponentTypeId>? types)
     {
         if (types is null || types.Count == 0)
         {
             return [];
         }
 
-        return types.Distinct().OrderBy(t => t.Value).ToArray();
+        return [..types.Distinct().OrderBy(t => t.Value)];
     }
 }
 

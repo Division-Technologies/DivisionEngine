@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+
 namespace DivisionEngine;
 
 /// <summary>
@@ -455,9 +457,9 @@ public sealed class JobGraph
     ///     engine. With <paramref name="expected" /> (a replay), exactly those completions are admitted,
     ///     waiting for each to arrive; everything else stays queued. Returns the admitted keys in order.
     /// </summary>
-    public ExternalKey[] AdmitExternal(IReadOnlyList<ExternalKey>? expected = null, TimeSpan? timeout = null)
+    public ExternalKey[] AdmitExternal(ImmutableArray<ExternalKey> expected = default, TimeSpan? timeout = null)
     {
-        if (expected is null)
+        if (expected.IsDefault)
         {
             using (_issueLock.EnterScope())
             {

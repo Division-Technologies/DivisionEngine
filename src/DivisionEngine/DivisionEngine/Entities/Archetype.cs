@@ -1,4 +1,6 @@
+using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace DivisionEngine;
 
@@ -11,13 +13,14 @@ public sealed class Archetype
 {
     private readonly int[] _slotOfType;
 
-    internal Archetype(int index, ComponentTypeId[] types)
+    internal Archetype(int index, ReadOnlySpan<ComponentTypeId> types)
     {
         Index = index;
-        Types = types;
-        Infos = new ComponentTypeInfo[types.Length];
-        Offsets = new int[types.Length];
-        ManagedIndex = new int[types.Length];
+        Types = ImmutableCollectionsMarshal.AsImmutableArray(types.ToArray());
+
+        var infos = new ComponentTypeInfo[types.Length];
+        var offsets = new int[types.Length];
+        var managedIndex = new int[types.Length];
 
         var maxTypeId = -1;
         var managedCount = 0;
@@ -25,9 +28,9 @@ public sealed class Archetype
         for (var slot = 0; slot < types.Length; slot++)
         {
             var info = ComponentTypeRegistry.GetInfo(types[slot]);
-            Infos[slot] = info;
+            infos[slot] = info;
             maxTypeId = Math.Max(maxTypeId, info.Id.Value);
-            ManagedIndex[slot] = info.IsManaged ? managedCount++ : -1;
+            managedIndex[slot] = info.IsManaged ? managedCount++ : -1;
             bytesPerEntity += info.Size;
         }
 
@@ -41,7 +44,7 @@ public sealed class Archetype
 
         // Largest capacity whose aligned layout fits in a chunk.
         var capacity = Chunk.SizeInBytes / bytesPerEntity;
-        while (capacity > 0 && LayoutSize(capacity) > Chunk.SizeInBytes)
+        while (capacity > 0 && LayoutSize(infos, offsets, capacity) > Chunk.SizeInBytes)
         {
             capacity--;
         }
@@ -53,22 +56,27 @@ public sealed class Archetype
         }
 
         Capacity = capacity;
-        LayoutSize(capacity); // writes final offsets
+        LayoutSize(infos, offsets, capacity); // writes final offsets
+
+        // Frozen rather than copied: the arrays were built here and are not referenced elsewhere.
+        Infos = ImmutableCollectionsMarshal.AsImmutableArray(infos);
+        Offsets = ImmutableCollectionsMarshal.AsImmutableArray(offsets);
+        ManagedIndex = ImmutableCollectionsMarshal.AsImmutableArray(managedIndex);
     }
 
     /// <summary>Index of this archetype within its world (creation order).</summary>
     public int Index { get; }
 
     /// <summary>Component types, sorted by id.</summary>
-    public ComponentTypeId[] Types { get; }
+    public ImmutableArray<ComponentTypeId> Types { get; }
 
-    public ComponentTypeInfo[] Infos { get; }
+    public ImmutableArray<ComponentTypeInfo> Infos { get; }
 
     /// <summary>Byte offset of each slot's array within a chunk (0 for slots without chunk data).</summary>
-    internal int[] Offsets { get; }
+    internal ImmutableArray<int> Offsets { get; }
 
     /// <summary>For each slot, its index among the archetype's managed types, or -1.</summary>
-    internal int[] ManagedIndex { get; }
+    internal ImmutableArray<int> ManagedIndex { get; }
 
     internal int ManagedTypeCount { get; }
 
@@ -94,20 +102,20 @@ public sealed class Archetype
         return SlotOf(id) >= 0;
     }
 
-    private int LayoutSize(int capacity)
+    private static int LayoutSize(ComponentTypeInfo[] infos, int[] offsets, int capacity)
     {
         var offset = capacity * Unsafe.SizeOf<Entity>();
-        for (var slot = 0; slot < Infos.Length; slot++)
+        for (var slot = 0; slot < infos.Length; slot++)
         {
-            var info = Infos[slot];
+            var info = infos[slot];
             if (info.Size == 0)
             {
-                Offsets[slot] = 0;
+                offsets[slot] = 0;
                 continue;
             }
 
             offset = (offset + info.Alignment - 1) & ~(info.Alignment - 1);
-            Offsets[slot] = offset;
+            offsets[slot] = offset;
             offset += info.Size * capacity;
         }
 
@@ -121,13 +129,13 @@ public sealed class Archetype
 }
 
 /// <summary>Sorted, distinct component-type set used as the archetype dictionary key.</summary>
-internal readonly struct ArchetypeKey(ComponentTypeId[] types) : IEquatable<ArchetypeKey>
+internal readonly struct ArchetypeKey(ImmutableArray<ComponentTypeId> types) : IEquatable<ArchetypeKey>
 {
-    public readonly ComponentTypeId[] Types = types;
+    public readonly ImmutableArray<ComponentTypeId> Types = types;
 
     public bool Equals(ArchetypeKey other)
     {
-        return Types.AsSpan().SequenceEqual(other.Types);
+        return Types.AsSpan().SequenceEqual(other.Types.AsSpan());
     }
 
     public override bool Equals(object? obj)
@@ -137,7 +145,7 @@ internal readonly struct ArchetypeKey(ComponentTypeId[] types) : IEquatable<Arch
 
     public override int GetHashCode()
     {
-        return Hash(Types);
+        return Hash(Types.AsSpan());
     }
 
     public static int Hash(ReadOnlySpan<ComponentTypeId> types)
@@ -159,12 +167,12 @@ internal readonly struct ArchetypeKey(ComponentTypeId[] types) : IEquatable<Arch
 
         public ArchetypeKey Create(ReadOnlySpan<ComponentTypeId> alternate)
         {
-            return new ArchetypeKey(alternate.ToArray());
+            return new ArchetypeKey(ImmutableCollectionsMarshal.AsImmutableArray(alternate.ToArray()));
         }
 
         public bool Equals(ReadOnlySpan<ComponentTypeId> alternate, ArchetypeKey other)
         {
-            return alternate.SequenceEqual(other.Types);
+            return alternate.SequenceEqual(other.Types.AsSpan());
         }
 
         public int GetHashCode(ReadOnlySpan<ComponentTypeId> alternate)
