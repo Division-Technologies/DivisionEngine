@@ -132,6 +132,25 @@ public sealed class ReplayTests
         Assert.That(times, Is.EqualTo(new[] { 0.0, 0.25 }).Within(1e-9));
     }
 
+    [Test]
+    public void Replay_RequiresAFreshEngine_AndTheLogsClock()
+    {
+        var log = new FrameLog();
+        log.Add(new FrameRecord(Realtime.FromTicks(1000, 1000), []));
+
+        using (var used = new Engine(NullLogger.Instance, new JobScheduler(1)))
+        {
+            used.RunFrame(Realtime.FromTicks(0, 1000));
+            Assert.That(() => used.Replay(log), Throws.InvalidOperationException,
+                "the clocks are not rewound, so a used engine cannot reproduce the run");
+        }
+
+        using var engine = new Engine(NullLogger.Instance, new JobScheduler(1));
+        engine.Replay(log);
+        Assert.That(() => engine.RunFrame(Realtime.FromTicks(5000, 1000)), Throws.InvalidOperationException,
+            "while replaying, the clock comes from the log");
+    }
+
     private sealed class TimeProbe(List<double> times) : ISystem
     {
         public void Execute(ref FrameContext ctx)

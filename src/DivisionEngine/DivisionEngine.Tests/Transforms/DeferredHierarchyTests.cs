@@ -67,7 +67,10 @@ public sealed class DeferredHierarchyTests
         var entity = buffer.CreateEntity();
         buffer.AddComponent(entity, new Parent { Value = foreign });
 
-        Assert.That(() => buffer.Playback(world), Throws.InvalidOperationException);
+        Assert.That(() => buffer.Playback(world),
+            Throws.TypeOf<EntityCommandBufferPlaybackException>()
+                .With.Property(nameof(EntityCommandBufferPlaybackException.Errors))
+                .With.One.InstanceOf<InvalidOperationException>());
     }
 
     [Test]

@@ -251,4 +251,15 @@ public sealed class FrameLoopTests
                 "frame clock counts from the first frame");
         });
     }
+
+    [Test]
+    public void SameClockSampleTwice_AfterTheStart_KeepsTheClockWhereItWas()
+    {
+        _engine.RunFrame(At(0));
+        _engine.RunFrame(At(0.05));
+        _log.Clear();
+        _engine.RunFrame(At(0.05));
+        Assert.That(_log.Single(e => e.phase == PhaseId.Update).time, Is.EqualTo(0.05).Within(1e-9),
+            "a repeated sample must not wind the clock back");
+    }
 }

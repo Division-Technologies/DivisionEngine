@@ -313,7 +313,15 @@ public sealed class AssetDatabase : IDisposable
         Reimport(Normalize(path), new HashSet<ScopeId>());
     }
 
-    /// <summary>Reloads user assemblies if any changed since the last reload; otherwise a no-op.</summary>
+    /// <summary>
+    ///     Reloads user assemblies if any changed since the last reload; otherwise a no-op.
+    ///     <para>
+    ///         The flag is cleared before trying, not after succeeding. A reload that fails puts the
+    ///         previous assemblies back (see <see cref="ReloadScripts" />), and trying again with the
+    ///         same DLLs would fail the same way every frame, redoing a full snapshot each time; the next
+    ///         compile sets the flag again.
+    ///     </para>
+    /// </summary>
     public void ReloadScriptsIfDirty(ScriptHost host, IReloadParticipant? participant = null)
     {
         if (!ScriptsDirty)
@@ -325,6 +333,18 @@ public sealed class AssetDatabase : IDisposable
         ReloadScripts(host, _scriptDlls.Values.ToArray(), participant);
     }
 
+    /// <summary>
+    ///     Swaps the user assemblies, carrying every loaded asset and the <paramref name="participant" />
+    ///     across.
+    ///     <para>
+    ///         Everything is written out before anything is torn down, so a failure while capturing
+    ///         leaves the editor exactly as it was. If loading the new assemblies fails — a DLL that is
+    ///         not an assembly, a module initializer that throws — the previous assemblies are loaded
+    ///         again, the state is restored against them, and the failure is rethrown as a
+    ///         <see cref="ScriptReloadException" />. An asset that no longer loads against the new types
+    ///         is skipped with an error rather than stopping the others.
+    ///     </para>
+    /// </summary>
     /// <param name="participant">
     ///     State outside the asset graph that must be carried across the swap — the entity world, in
     ///     practice. It is called around the assembly swap rather than before or after the whole
@@ -333,7 +353,8 @@ public sealed class AssetDatabase : IDisposable
     /// </param>
     public void ReloadScripts(ScriptHost host, IReadOnlyList<string> dllPaths, IReloadParticipant? participant = null)
     {
-        // 1. Serialize every materialized scope's current runtime state.
+        // 1. Capture: serialize every materialized scope and let the participant write itself out.
+        //    Nothing has been torn down yet, so throwing here costs nothing.
         var saved = new Dictionary<ScopeId, byte[]>();
         foreach (var (guid, scope) in _scopes)
         {
@@ -343,7 +364,10 @@ public sealed class AssetDatabase : IDisposable
             }
         }
 
-        // 2. Drop the live object graph so no engine->user references keep the old context alive.
+        participant?.Capture();
+
+        // 2. Release: drop the live object graph so no engine->user references keep the old context
+        //    alive, and let the participant release its own.
         foreach (var scope in _scopes.Values)
         {
             scope.Dispose();
@@ -351,15 +375,24 @@ public sealed class AssetDatabase : IDisposable
 
         _scopes.Clear();
         _loaders.Clear();
+        participant?.Release();
 
-        // 3. Let anything outside the asset graph save itself and release the old types.
-        participant?.BeforeSwap();
+        // 3. Swap the user assembly context; route all subsequent type resolution through it. On
+        //    failure the host has put the previous assemblies back, and the state is restored against
+        //    those instead.
+        Exception? swapFailure = null;
+        try
+        {
+            host.Swap(dllPaths);
+        }
+        catch (Exception ex)
+        {
+            swapFailure = ex;
+        }
 
-        // 4. Swap the user assembly context; route all subsequent type resolution through it.
-        host.Swap(dllPaths);
         _typeResolver = host.TypeResolver;
 
-        // 5. Rebuild the saved scopes from their serialized state, materializing with the new types.
+        // 4. Rebuild the saved scopes from their serialized state, materializing with the loaded types.
         foreach (var (guid, bytes) in saved)
         {
             var loader = new FileScopeLoader(bytes, _typeResolver);
@@ -371,20 +404,40 @@ public sealed class AssetDatabase : IDisposable
         var resolver = new AssetResolver(this);
         foreach (var guid in saved.Keys)
         {
-            if (_loaders[guid] is FileScopeLoader loader)
+            if (_loaders[guid] is not FileScopeLoader loader)
+            {
+                continue;
+            }
+
+            try
             {
                 foreach (var localId in loader.ObjectIds)
                 {
                     resolver.Resolve(new GlobalId(guid, localId));
                 }
             }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine(
+                    $"[AssetDatabase] Asset {guid} could not be rebuilt after the script reload, skipping: {ex}");
+            }
         }
 
         resolver.DrainPending();
 
-        // 6. Now that assets are materialized against the new types, let the participant read itself
-        //    back — it may reference them.
-        participant?.AfterSwap();
+        // 5. Now that assets are materialized, let the participant read itself back — it may
+        //    reference them.
+        if (participant is not null)
+        {
+            participant.Restore(resolver);
+            resolver.DrainPending();
+        }
+
+        if (swapFailure is not null)
+        {
+            throw new ScriptReloadException(
+                "The new user assemblies could not be loaded; the previous ones were restored.", swapFailure);
+        }
     }
 
     private void Reimport(string path, HashSet<ScopeId> visited)

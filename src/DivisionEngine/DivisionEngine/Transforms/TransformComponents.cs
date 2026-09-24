@@ -131,8 +131,10 @@ public partial struct Sibling
 ///     <para>
 ///         Staticness has to be downward-closed from a root: if an ancestor moved, a skipped subtree
 ///         would silently keep a stale <see cref="WorldTransform" />. <c>MakeStatic</c> therefore
-///         refuses an entity whose parent is not itself static, and <c>SetParent</c> refuses to move
-///         a static entity under a moving one.
+///         refuses an entity whose parent is not itself static and tags the whole subtree,
+///         <c>MakeDynamic</c> untags the whole subtree, and <c>SetParent</c> refuses to mix static
+///         and moving entities across a link. Moving a static subtree with <c>SetParent</c> or
+///         <c>ClearParent</c> settles its world transforms again on the spot.
 ///     </para>
 /// </remarks>
 [Component]

@@ -116,34 +116,44 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
 ///     Fluent builder for <see cref="EntityQuery" />; <see cref="Build" /> returns the world's cached query for the
 ///     description.
 /// </summary>
-public struct QueryBuilder
+/// <remarks>
+///     A value: each call returns a new builder and leaves the one it was called on as it was, so a
+///     partly built query can be branched (<c>var b = q.With&lt;A&gt;(); b.With&lt;B&gt;()</c> does not
+///     change <c>b</c>).
+/// </remarks>
+public readonly struct QueryBuilder
 {
     private readonly World _world;
-    private List<ComponentTypeId>? _all;
-    private List<ComponentTypeId>? _any;
-    private List<ComponentTypeId>? _none;
+    private readonly ImmutableArray<ComponentTypeId> _all;
+    private readonly ImmutableArray<ComponentTypeId> _any;
+    private readonly ImmutableArray<ComponentTypeId> _none;
 
-    internal QueryBuilder(World world)
+    internal QueryBuilder(World world) : this(world, [], [], [])
+    {
+    }
+
+    private QueryBuilder(World world, ImmutableArray<ComponentTypeId> all, ImmutableArray<ComponentTypeId> any,
+        ImmutableArray<ComponentTypeId> none)
     {
         _world = world;
+        _all = all;
+        _any = any;
+        _none = none;
     }
 
     public QueryBuilder With<T>()
     {
-        (_all ??= new List<ComponentTypeId>()).Add(ComponentType<T>.Id);
-        return this;
+        return new QueryBuilder(_world, _all.Add(ComponentType<T>.Id), _any, _none);
     }
 
     public QueryBuilder WithAny<T>()
     {
-        (_any ??= new List<ComponentTypeId>()).Add(ComponentType<T>.Id);
-        return this;
+        return new QueryBuilder(_world, _all, _any.Add(ComponentType<T>.Id), _none);
     }
 
     public QueryBuilder Without<T>()
     {
-        (_none ??= new List<ComponentTypeId>()).Add(ComponentType<T>.Id);
-        return this;
+        return new QueryBuilder(_world, _all, _any, _none.Add(ComponentType<T>.Id));
     }
 
     public EntityQuery Build()
@@ -151,9 +161,9 @@ public struct QueryBuilder
         return _world.GetQuery(new QueryDescription(Normalize(_all), Normalize(_any), Normalize(_none)));
     }
 
-    private static ImmutableArray<ComponentTypeId> Normalize(List<ComponentTypeId>? types)
+    private static ImmutableArray<ComponentTypeId> Normalize(ImmutableArray<ComponentTypeId> types)
     {
-        if (types is null || types.Count == 0)
+        if (types.IsDefaultOrEmpty)
         {
             return [];
         }

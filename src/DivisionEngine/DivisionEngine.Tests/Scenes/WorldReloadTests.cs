@@ -24,6 +24,10 @@ public sealed class WorldReloadTests
     [TearDown]
     public void TearDown()
     {
+        // Each test loads its own copy of UserScripts.Counter; one left registered would collide with
+        // the next test's copy. The tests' worlds are disposed by now, which the registry requires.
+        ComponentTypeRegistry.UnregisterUnloadable();
+
         if (Directory.Exists(_dir))
         {
             Directory.Delete(_dir, true);
@@ -166,7 +170,7 @@ public sealed class WorldReloadTests
     ///     assembly alive once it returns.
     /// </summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private (byte[] Snapshot, int EntityCount, WeakReference OldAssembly) RunV1(ScriptHost host, World world)
+    private (EntityScene Snapshot, int EntityCount, WeakReference OldAssembly) RunV1(ScriptHost host, World world)
     {
         host.Swap([Compile("CounterV1", CounterV1())]);
         var v1 = host.LoadedAssemblies[0];
@@ -176,6 +180,63 @@ public sealed class WorldReloadTests
         var count = world.EntityCount;
 
         return (WorldReload.BeforeSwap(world), count, new WeakReference(v1));
+    }
+
+    /// <summary>Carries a bare world across a reload, the way WorldReloadParticipant carries an engine's.</summary>
+    private sealed class WorldParticipant(World world) : IReloadParticipant
+    {
+        private EntityScene? _snapshot;
+
+        public void Capture()
+        {
+            _snapshot = WorldReload.Capture(world);
+        }
+
+        public void Release()
+        {
+            WorldReload.Release(world);
+        }
+
+        public void Restore(ISerializedObjectResolver references)
+        {
+            WorldReload.AfterSwap(world, _snapshot!, references);
+        }
+    }
+
+    [Test]
+    public void AFailedSwap_PutsThePreviousAssembliesBack_AndTheWorldWithThem()
+    {
+        var host = new ScriptHost();
+        using var world = new World();
+        using var database = new AssetDatabase(Path.Combine(_dir, "cache"));
+        host.Swap([Compile("CounterV1", CounterV1())]);
+        var entity = (Entity)Call(host.LoadedAssemblies[0], "Spawn", world, 7)!;
+
+        var broken = Compile("Broken", CounterV2().Replace(
+            "ComponentTypeRegistry.RegisterValueSerializer<Counter>();",
+            "ComponentTypeRegistry.RegisterValueSerializer<Counter>(); throw new InvalidOperationException(\"init\");"));
+
+        Assert.That(() => database.ReloadScripts(host, [broken], new WorldParticipant(world)),
+            Throws.TypeOf<ScriptReloadException>());
+
+        var current = host.LoadedAssemblies.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(current.GetName().Name, Is.EqualTo("CounterV1"), "the previous build is loaded again");
+            Assert.That(world.IsAlive(entity), Is.True, "under the same handle");
+            Assert.That(Call(current, "Read", world, entity), Is.EqualTo(7));
+        });
+    }
+
+    [Test]
+    public void ReloadingWithoutAParticipant_ReleasesTheOldComponentTypes()
+    {
+        var host = new ScriptHost();
+        using var database = new AssetDatabase(Path.Combine(_dir, "cache"));
+        host.Swap([Compile("CounterV1", CounterV1())]);
+
+        // The same component again: its persisted id would collide if the old type were still registered.
+        Assert.That(() => database.ReloadScripts(host, [Compile("CounterV1Again", CounterV1())]), Throws.Nothing);
     }
 
     [Test]

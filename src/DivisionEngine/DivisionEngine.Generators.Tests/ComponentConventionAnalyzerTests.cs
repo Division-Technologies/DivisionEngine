@@ -137,4 +137,76 @@ public sealed class ComponentConventionAnalyzerTests
                              }
                              """), Is.EqualTo(new[] { ComponentConventionAnalyzer.GenericComponentId }));
     }
+
+    [TestCase("public struct Link { public Entity Target; }")]
+    [TestCase("public struct Link { internal Entity Target; }")]
+    [TestCase("public struct Link { public Entity Target { get; set; } }")]
+    [TestCase("public record struct Link(Entity Target);")]
+    [TestCase("public struct Link { public Pair Ends; } public struct Pair { public Entity First; }")]
+    [TestCase("public struct Link { private int _hidden; public int Get() => _hidden; public Entity Target; }",
+        Description = "a private field that holds no entity is none of this rule's business")]
+    public void AnEntityTheRemapperReaches_IsAccepted(string declaration)
+    {
+        Assert.That(Diagnose("[Component][AutoSerialization] " + declaration),
+            Is.Empty);
+    }
+
+    [TestCase("public struct Link { private Entity _target; public Entity Get() => _target; }",
+        TestName = "APrivateField")]
+    [TestCase("public struct Link { public Entity Target { get; private set; } }", TestName = "APrivateSetter")]
+    [TestCase(
+        "public struct Link { public Pair Ends; } public struct Pair { private Entity _first; public Entity Get() => _first; }",
+        TestName = "APrivateFieldOfANestedStruct")]
+    [TestCase("public struct Link { public Pair Ends { get; set; } } public struct Pair { public Entity First; }",
+        TestName = "AStructProperty")]
+    public void AnEntityTheRemapperCannotReach_IsFlagged(string declaration)
+    {
+        Assert.That(Diagnose("[Component][AutoSerialization] " + declaration),
+            Is.EqualTo(new[] { ComponentConventionAnalyzer.UnreachableEntityFieldId }));
+    }
+
+    [TestCase("public struct Link { public readonly Entity Target; }", TestName = "AReadOnlyField")]
+    [TestCase("public readonly struct Link { public readonly Entity Target; }", TestName = "AReadOnlyStruct")]
+    [TestCase("public struct Link { public Entity Target { get; } }", TestName = "AGetOnlyProperty")]
+    [TestCase("public struct Link { public Entity Target { get; init; } }", TestName = "AnInitOnlyProperty")]
+    [TestCase("public readonly record struct Link(Entity Target);", TestName = "AReadOnlyRecordStruct")]
+    [TestCase("public struct Link { public readonly Pair Ends; } public struct Pair { public Entity First; }",
+        TestName = "AReadOnlyStructField")]
+    public void AReadOnlyEntity_IsFlagged(string declaration)
+    {
+        Assert.That(Diagnose("[Component][AutoSerialization] " + declaration),
+            Is.EqualTo(new[] { ComponentConventionAnalyzer.ReadOnlyEntityFieldId }));
+    }
+
+    [Test]
+    public void AnUnreachableEntity_IsReportedAtTheMember()
+    {
+        var diagnostic = AnalyzerHarness.Run(new ComponentConventionAnalyzer(), """
+            using DivisionEngine;
+            namespace Probe;
+            [Component][AutoSerialization]
+            public partial struct Link
+            {
+                private Entity _target;
+                public Entity Get() => _target;
+            }
+            """).Single();
+
+        var at = diagnostic.Location.SourceTree!.ToString()[diagnostic.Location.SourceSpan.Start..];
+        Assert.That(at, Does.StartWith("_target"));
+        Assert.That(diagnostic.GetMessage(), Does.Contain("'_target' of component 'Link'"));
+    }
+
+    [Test]
+    public void AComponentThatIsNotRegistered_IsNotAlsoFlaggedForItsEntities()
+    {
+        // DIVENT002 already says nothing is generated for it, remapping included.
+        Assert.That(Diagnose("""
+                             public sealed class Outer
+                             {
+                                 [Component][AutoSerialization]
+                                 private partial struct Hidden { private Entity _target; public Entity Get() => _target; }
+                             }
+                             """), Is.EqualTo(new[] { ComponentConventionAnalyzer.NotAssemblyVisibleId }));
+    }
 }

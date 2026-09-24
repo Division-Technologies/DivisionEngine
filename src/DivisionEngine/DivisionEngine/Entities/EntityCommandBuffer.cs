@@ -67,46 +67,83 @@ public sealed class EntityCommandBuffer
         RecordManaged(CommandKind.SetManagedComponent, entity, ComponentType<T>.Id, value);
     }
 
-    /// <summary>Applies all recorded commands to <paramref name="world" /> in order, then clears the buffer.</summary>
+    /// <summary>
+    ///     Applies all recorded commands to <paramref name="world" /> in order, then clears the buffer.
+    ///     <para>
+    ///         Destroying an entity that is already gone is a no-op: two behaviors that each decide to
+    ///         destroy the same enemy is ordinary gameplay, not an error. Any other command that fails
+    ///         is skipped and the rest are still applied; the buffer is cleared either way, and the
+    ///         failures are thrown together at the end as an
+    ///         <see cref="EntityCommandBufferPlaybackException" />.
+    ///     </para>
+    /// </summary>
     public void Playback(World world)
     {
-        var resolved = _deferredCount == 0 ? [] : new Entity[_deferredCount];
-        var map = new EntityRemap(resolved);
-        foreach (var command in _commands)
+        ArgumentNullException.ThrowIfNull(world);
+        List<Exception>? errors = null;
+        try
         {
-            if (command.Kind == CommandKind.CreateEntity)
+            var resolved = _deferredCount == 0 ? [] : new Entity[_deferredCount];
+            var map = new EntityRemap(resolved);
+            foreach (var command in _commands)
             {
-                resolved[-1 - command.Entity.Index] = world.CreateEntity();
-                continue;
-            }
-
-            var entity = map.Resolve(command.Entity);
-            switch (command.Kind)
-            {
-                case CommandKind.DestroyEntity:
-                    world.DestroyEntity(entity);
-                    break;
-                case CommandKind.AddComponent:
-                    world.AddComponent(entity, command.Type, Remapped(command, map));
-                    break;
-                case CommandKind.SetComponent:
-                    world.SetComponent(entity, command.Type, Remapped(command, map));
-                    break;
-                case CommandKind.RemoveComponent:
-                    world.RemoveComponent(entity, command.Type);
-                    break;
-                case CommandKind.AddManagedComponent:
-                    world.AddManagedComponent(entity, command.Type, _objects[command.ObjectIndex]);
-                    break;
-                case CommandKind.SetManagedComponent:
-                    world.SetManagedComponent(entity, command.Type, _objects[command.ObjectIndex]);
-                    break;
-                default:
-                    throw new InvalidOperationException($"Unknown command {command.Kind}.");
+                try
+                {
+                    Apply(world, command, resolved, map);
+                }
+                catch (Exception ex)
+                {
+                    (errors ??= []).Add(ex);
+                }
             }
         }
+        finally
+        {
+            Clear();
+        }
 
-        Clear();
+        if (errors is not null)
+        {
+            throw new EntityCommandBufferPlaybackException(errors);
+        }
+    }
+
+    private void Apply(World world, in Command command, Entity[] resolved, EntityRemap map)
+    {
+        if (command.Kind == CommandKind.CreateEntity)
+        {
+            resolved[-1 - command.Entity.Index] = world.CreateEntity();
+            return;
+        }
+
+        var entity = map.Resolve(command.Entity);
+        switch (command.Kind)
+        {
+            case CommandKind.DestroyEntity:
+                if (world.IsAlive(entity))
+                {
+                    world.DestroyEntity(entity);
+                }
+
+                break;
+            case CommandKind.AddComponent:
+                world.AddComponent(entity, command.Type, Remapped(command, map));
+                break;
+            case CommandKind.SetComponent:
+                world.SetComponent(entity, command.Type, Remapped(command, map));
+                break;
+            case CommandKind.RemoveComponent:
+                world.RemoveComponent(entity, command.Type);
+                break;
+            case CommandKind.AddManagedComponent:
+                world.AddManagedComponent(entity, command.Type, _objects[command.ObjectIndex]);
+                break;
+            case CommandKind.SetManagedComponent:
+                world.SetManagedComponent(entity, command.Type, _objects[command.ObjectIndex]);
+                break;
+            default:
+                throw new InvalidOperationException($"Unknown command {command.Kind}.");
+        }
     }
 
     public void Clear()
@@ -184,4 +221,11 @@ public sealed class EntityCommandBuffer
         public int PayloadLength;
         public int ObjectIndex;
     }
+}
+
+/// <summary>Commands that failed during <see cref="EntityCommandBuffer.Playback" />; the others were applied.</summary>
+public sealed class EntityCommandBufferPlaybackException(IReadOnlyList<Exception> errors)
+    : AggregateException($"{errors.Count} command(s) could not be played back and were skipped.", errors)
+{
+    public IReadOnlyList<Exception> Errors { get; } = errors;
 }

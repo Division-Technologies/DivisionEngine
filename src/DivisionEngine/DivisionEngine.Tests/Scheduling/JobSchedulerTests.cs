@@ -309,6 +309,36 @@ public sealed class JobSchedulerTests
         }
     }
 
+    [TestCase(0)]
+    [TestCase(3)]
+    public void FailingItemCount_FailsTheNode_WithoutHangingOrKillingAWorker(int workers)
+    {
+        var (scheduler, world, graph) = Create(workers);
+        using (scheduler)
+        using (world)
+        {
+            var resource = ResourceId.Unique("list");
+            var successorRan = false;
+
+            // Ready with no dependency: the count is read on the main thread, inside ScheduleBatches.
+            graph.ScheduleBatches("immediate", () => throw new InvalidOperationException("count"),
+                AccessSet.None, (in _, _, _) => { });
+
+            // Ready once its predecessor completes: the count is read on whichever thread completes it.
+            graph.Schedule("producer", Access.Write(resource), _ => Thread.Sleep(5));
+            graph.ScheduleBatches("released", () => throw new InvalidOperationException("count"),
+                Access.Write(resource), (in _, _, _) => { });
+            graph.Schedule("successor", Access.Write(resource), _ => successorRan = true);
+
+            Assert.That(() => graph.WaitAll(), Throws.TypeOf<JobFailedException>());
+            Assert.Multiple(() =>
+            {
+                Assert.That(scheduler.LiveNodeCount, Is.Zero);
+                Assert.That(successorRan, Is.True, "a failed node still releases its successors");
+            });
+        }
+    }
+
     [Test]
     public void SchedulingFromAJob_IsAllowed_AndWaitedForByWaitAll()
     {

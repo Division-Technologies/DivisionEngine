@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Runtime.InteropServices;
 using VYaml.Emitter;
 using VYaml.Parser;
 
@@ -16,20 +17,38 @@ public sealed class EntitySceneException(string message) : InvalidOperationExcep
 ///         keeps <see cref="World" /> itself free of any knowledge of the serialization layer.
 ///     </para>
 ///     <para>
-///         Entities are stored under scene-local ids rather than their live handles, which are
-///         indices into a particular world and mean nothing once it is rebuilt. Component values keep
-///         their fields, not their bytes, so a component that gains, loses or reorders a field still
-///         loads — the layout is re-derived from the types of the current run.
+///         Every component is held in its written form — field by field, entity references as
+///         scene-local ids, asset references as their global ids — and only read into a type when the
+///         scene is applied. So a scene holds nothing of the types it was made from: it can be kept
+///         across a swap of the assemblies that define them, and a component that gains, loses or
+///         reorders a field still loads, laid out for the types of the moment.
+///     </para>
+///     <para>
+///         Applying is tolerant. A component whose type is gone, or whose value no longer reads as its
+///         type, does not stop the load: it is set aside on the entity as a
+///         <see cref="MissingComponents" /> entry, reported, and written back as it was when the entity
+///         is next captured.
+///     </para>
+///     <para>
+///         Scene-local ids are the entities' indices in the world they were captured from. That keeps
+///         them stable across a script reload, which rebuilds each entity under its old handle; a
+///         scene applied to any other world gets new entities, and the ids only link records within
+///         the scene.
 ///     </para>
 /// </summary>
 [TypeId("2d5b8e07-14af-4c93-a6d2-9f01b3e6c800")]
 public sealed class EntityScene : ISerializableObject
 {
     private const int FieldEntities = 0;
+    private const int NodeId = 0;
 
+    private readonly List<string> _warnings = new();
     private List<EntityRecord> _entities = new();
 
     public int EntityCount => _entities.Count;
+
+    /// <summary>What was dropped or set aside while the scene was captured.</summary>
+    public IReadOnlyList<string> Warnings => _warnings;
 
     public SerializationScope Scope { get; set; } = null!;
     public LocalId Id { get; set; }
@@ -38,15 +57,6 @@ public sealed class EntityScene : ISerializableObject
 
     void ISerializable.Serialize<TSerializer>(ref TSerializer serializer)
     {
-        // Entity-valued fields resolve through this context while the component formatters run.
-        var context = new EntitySerializationContext();
-        foreach (var record in _entities)
-        {
-            context.Map(EntitySerializationContext.PlaceholderFor(record.Id), record.Id);
-        }
-
-        using var _ = context.Enter();
-
         serializer.BeginArray(FieldEntities, "entities"u8, _entities.Count);
         foreach (var record in _entities)
         {
@@ -58,8 +68,6 @@ public sealed class EntityScene : ISerializableObject
 
     void ISerializable.Deserialize<TDeserializer>(ref TDeserializer deserializer)
     {
-        using var _ = EntitySerializationContext.ForLoading().Enter();
-
         _entities = new List<EntityRecord>();
         if (!deserializer.TryBeginArray(FieldEntities, "entities"u8, out var count))
         {
@@ -74,18 +82,7 @@ public sealed class EntityScene : ISerializableObject
         deserializer.EndArray();
     }
 
-    // ---------------------------------------------------------------- snapshots
-
-    /// <summary>
-    ///     Writes the scene to a self-contained byte buffer.
-    ///     <para>
-    ///         This is the form that survives a change to the component types themselves, and the
-    ///         reason a reload has to pass through it rather than just capture and re-apply: capture
-    ///         copies component values as raw chunk bytes, laid out for the types of the moment,
-    ///         whereas writing them out goes field by field. Read back against changed types, the
-    ///         fields land where they now belong.
-    ///     </para>
-    /// </summary>
+    /// <summary>Writes the scene to a self-contained byte buffer.</summary>
     public byte[] ToBytes()
     {
         var writer = new ArrayBufferWriter<byte>();
@@ -97,15 +94,11 @@ public sealed class EntityScene : ISerializableObject
         return writer.WrittenSpan.ToArray();
     }
 
-    /// <summary>
-    ///     Reads back a scene written by <see cref="ToBytes" />. Component types are resolved by their
-    ///     persisted ids against whatever is registered now, so this must run after any assembly swap
-    ///     that redefines them.
-    /// </summary>
+    /// <summary>Reads back a scene written by <see cref="ToBytes" />. No component type is needed for this.</summary>
     public static EntityScene FromBytes(ReadOnlyMemory<byte> bytes)
     {
         var parser = new YamlParser(new ReadOnlySequence<byte>(bytes));
-        var deserializer = new YamlDeserializer(parser, NoReferences.Instance);
+        var deserializer = new YamlDeserializer(parser, null);
         deserializer.TryBeginObject(out _, out _);
         var scene = new EntityScene();
         ((ISerializable)scene).Deserialize(ref deserializer);
@@ -121,92 +114,110 @@ public sealed class EntityScene : ISerializableObject
         return CaptureFrom(world, CollectAll(world));
     }
 
-    /// <summary>Captures the given entities, in the order supplied.</summary>
+    /// <summary>
+    ///     Captures the given entities, in the order supplied. References to entities outside the set
+    ///     are written as null. What cannot be written — a managed component that is not
+    ///     <see cref="ISerializable" />, an unmanaged one with no value serializer, a reference to an
+    ///     object that belongs to no asset — is left out and listed in <see cref="Warnings" />.
+    /// </summary>
     public static EntityScene CaptureFrom(World world, IEnumerable<Entity> entities)
     {
         ArgumentNullException.ThrowIfNull(world);
         ArgumentNullException.ThrowIfNull(entities);
 
         var scene = new EntityScene();
-        var toPlaceholder = new Dictionary<Entity, Entity>();
+        var list = entities as IReadOnlyCollection<Entity> ?? entities.ToList();
 
-        foreach (var entity in entities)
+        // The whole set has to be known before anything is written, so references between captured
+        // entities come out as ids.
+        var context = new EntitySerializationContext();
+        foreach (var entity in list)
         {
             if (!world.IsAlive(entity))
             {
                 throw new EntityNotAliveException(entity);
             }
 
-            var record = new EntityRecord { Id = scene._entities.Count };
-            toPlaceholder[entity] = EntitySerializationContext.PlaceholderFor(record.Id);
+            context.MapToPersistent(entity, entity.Index);
+        }
 
+        using var _ = context.Enter();
+        foreach (var entity in list)
+        {
+            var record = new EntityRecord { Id = entity.Index, Version = entity.Version };
             foreach (var type in world.GetArchetype(entity).Types)
             {
-                var info = ComponentTypeRegistry.GetInfo(type);
-                if (info.IsManaged)
-                {
-                    // Managed components are written by value, not as a reference into a scope: a
-                    // class component belongs to its entity, so a scene stays self-contained and
-                    // applying it twice gives each copy its own instance.
-                    if (world.GetManagedComponent(entity, type) is not ISerializable serializable)
-                    {
-                        throw new EntitySceneException(
-                            $"{info.Type} is a managed component that does not implement ISerializable, so it cannot be saved. "
-                            + "Derive it from SerializableObject and mark it [AutoSerialization].");
-                    }
-
-                    record.Components.Add(new ComponentRecord(info.SerializedTypeId, serializable));
-                    continue;
-                }
-
-                var value = info.Size == 0 ? [] : new byte[info.Size];
-                if (info.Size > 0)
-                {
-                    world.CopyComponentUnchecked(entity, info, value);
-                }
-
-                record.Components.Add(new ComponentRecord(info.SerializedTypeId, value));
+                scene.CaptureComponent(world, entity, ComponentTypeRegistry.GetInfo(type), record);
             }
 
             scene._entities.Add(record);
         }
 
-        // Only now is the whole set known, so references between captured entities can be rewritten.
-        // A scene never holds live handles: after this pass its contents are identical in shape to a
-        // freshly loaded one, so capturing and applying without saving in between works too.
-        var map = new EntityRemap(toPlaceholder);
-
-        // Managed components cannot be rewritten at the byte level, so they are copied through the
-        // serializer instead, under a context that reads live handles and writes placeholders.
-        var capture = new EntitySerializationContext();
-        foreach (var (live, placeholder) in toPlaceholder)
-        {
-            var id = -1 - placeholder.Index;
-            capture.MapToPersistent(live, id);
-            capture.MapToLive(id, placeholder);
-        }
-
-        using (capture.Enter())
-        {
-            foreach (var record in scene._entities)
-            {
-                for (var i = 0; i < record.Components.Count; i++)
-                {
-                    var component = record.Components[i];
-                    var type = Resolve(component.TypeId);
-                    if (component.Managed is not null)
-                    {
-                        record.Components[i] = component.Detached(ComponentTypeRegistry.GetInfo(type));
-                    }
-                    else if (component.Value.Length > 0)
-                    {
-                        ComponentTypeRegistry.RemapEntityFields(type, component.Value, map);
-                    }
-                }
-            }
-        }
-
         return scene;
+    }
+
+    private void CaptureComponent(World world, Entity entity, ComponentTypeInfo info, EntityRecord record)
+    {
+        if (info.IsManaged)
+        {
+            var instance = world.GetManagedComponent(entity, info.Id);
+            if (instance is MissingComponents missing)
+            {
+                // Written back as the components they were, so they load again once their types do.
+                foreach (var entry in missing.Entries)
+                {
+                    record.Components.Add(new ComponentRecord(entry.TypeId, entry.Value));
+                }
+
+                return;
+            }
+
+            if (instance is not ISerializable serializable)
+            {
+                _warnings.Add(instance is null
+                    ? $"{entity}: {info.Type} was never assigned a value, so it was not saved."
+                    : $"{entity}: {info.Type} does not implement ISerializable, so it was not saved. "
+                      + "Derive it from SerializableObject and mark it [AutoSerialization].");
+                return;
+            }
+
+            record.Components.Add(new ComponentRecord(info.SerializedTypeId, WriteNode(entity, info,
+                (ref s) =>
+                {
+                    s.BeginStruct(NodeId, ""u8);
+                    serializable.Serialize(ref s);
+                    s.EndStruct();
+                })));
+            return;
+        }
+
+        if (info.Size == 0)
+        {
+            record.Components.Add(new ComponentRecord(info.SerializedTypeId, null));
+            return;
+        }
+
+        if (info.ValueSerializer is not { } valueSerializer)
+        {
+            _warnings.Add($"{entity}: {info.Type} has no value serializer, so it was not saved. "
+                          + "Mark it [Component] and [AutoSerialization].");
+            return;
+        }
+
+        var bytes = new byte[info.Size];
+        world.CopyComponentUnchecked(entity, info, bytes);
+        record.Components.Add(new ComponentRecord(info.SerializedTypeId, WriteNode(entity, info,
+            (ref s) => valueSerializer.Serialize(ref s, NodeId, ""u8, bytes))));
+    }
+
+    private byte[] WriteNode(Entity entity, ComponentTypeInfo info, NodeWriter write)
+    {
+        var writer = new ArrayBufferWriter<byte>();
+        var serializer = YamlSerializer.ForNode(new Utf8YamlEmitter(writer), unscoped =>
+            _warnings.Add($"{entity}: {info.Type} refers to a {unscoped.GetType().Name} that belongs to no asset; "
+                          + "the reference was saved as null."));
+        write(ref serializer);
+        return writer.WrittenSpan.ToArray();
     }
 
     private static List<Entity> CollectAll(World world)
@@ -224,96 +235,221 @@ public sealed class EntityScene : ISerializableObject
     // -------------------------------------------------------------------- apply
 
     /// <summary>
-    ///     Creates the scene's entities in <paramref name="world" /> and returns them indexed by
-    ///     scene-local id. Entity-valued component fields are rewritten to the newly created entities
-    ///     for every component type that declared its entity fields
-    ///     (<see cref="ComponentTypeRegistry.RegisterEntityFields{T}" />).
+    ///     Creates the scene's entities in <paramref name="world" /> and returns them in record order.
+    ///     Entity-valued fields are rewritten to the entities just created; asset references are
+    ///     resolved through <paramref name="references" /> (null leaves them null, with a warning).
+    ///     Components that cannot be loaded are set aside as <see cref="MissingComponents" /> and
+    ///     reported to <paramref name="warnings" />. Each application builds its own instances, so the
+    ///     same scene can be applied any number of times.
     /// </summary>
-    public Entity[] ApplyTo(World world)
+    public Entity[] ApplyTo(World world, ISerializedObjectResolver? references = null,
+        ICollection<string>? warnings = null)
+    {
+        return ApplyTo(world, references, warnings, false);
+    }
+
+    /// <param name="preserveHandles">
+    ///     Rebuild each entity under the handle it was captured with (<see cref="World.CreateEntityAt" />)
+    ///     rather than a new one: what a reload does, so that nothing holding a handle notices.
+    /// </param>
+    internal Entity[] ApplyTo(World world, ISerializedObjectResolver? references, ICollection<string>? warnings,
+        bool preserveHandles)
     {
         ArgumentNullException.ThrowIfNull(world);
+        warnings ??= new List<string>();
 
-        var created = new Entity[_entities.Count];
-        var types = new List<ComponentTypeId>();
-
-        for (var i = 0; i < _entities.Count; i++)
-        {
-            var record = _entities[i];
-            types.Clear();
-            foreach (var component in record.Components)
-            {
-                types.Add(Resolve(component.TypeId));
-            }
-
-            created[record.Id] = world.CreateEntity(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(types));
-        }
-
-        // The records hold placeholders; only now do the entities they stand for exist. The rewrite
-        // goes through a scratch copy so the scene keeps its placeholders and can be applied again,
-        // which is what instantiating the same scene more than once relies on.
-        var map = new EntityRemap(created);
-
-        // The same translation for managed components, which are copied through the serializer:
-        // placeholders on the way out, the entities just created on the way back in.
-        var apply = new EntitySerializationContext();
+        // Everything that could refuse the scene is checked before the world is touched, so a bad
+        // scene leaves the world as it was rather than half built.
+        var ids = new HashSet<int>();
         foreach (var record in _entities)
         {
-            apply.MapToPersistent(EntitySerializationContext.PlaceholderFor(record.Id), record.Id);
-            apply.MapToLive(record.Id, created[record.Id]);
+            if (record.Id < 0 || !ids.Add(record.Id))
+            {
+                throw new EntitySceneException($"The scene has an invalid or duplicate entity id {record.Id}.");
+            }
+
+            if (preserveHandles && (record.Version <= 0 || world.IsIndexInUse(record.Id)))
+            {
+                throw new EntitySceneException(
+                    $"Entity {record.Id} cannot be rebuilt under its old handle: the scene carries no version for it, "
+                    + "or the index is in use.");
+            }
         }
 
-        using var _ = apply.Enter();
-
-        Span<byte> scratch = stackalloc byte[256];
+        var plans = new List<ComponentPlan>[_entities.Count];
+        var created = new Entity[_entities.Count];
+        var types = new List<ComponentTypeId>();
         for (var i = 0; i < _entities.Count; i++)
         {
             var record = _entities[i];
-            var entity = created[record.Id];
-            foreach (var component in record.Components)
+            var plan = plans[i] = Plan(record);
+            types.Clear();
+            foreach (var component in plan)
             {
-                var type = Resolve(component.TypeId);
-                var info = ComponentTypeRegistry.GetInfo(type);
-                if (info.IsManaged)
+                if (component.Info is { } info)
                 {
-                    world.SetManagedComponent(entity, type, component.CloneManaged(info));
+                    types.Add(info.Id);
+                }
+            }
+
+            if (plan.Exists(c => c.Info is null))
+            {
+                types.Add(ComponentType<MissingComponents>.Id);
+            }
+
+            var span = CollectionsMarshal.AsSpan(types);
+            created[i] = preserveHandles
+                ? world.CreateEntityAt(new Entity(record.Id, record.Version), span)
+                : world.CreateEntity(span);
+        }
+
+        // The records hold scene-local ids; only now do the entities they stand for exist.
+        var context = new EntitySerializationContext();
+        for (var i = 0; i < _entities.Count; i++)
+        {
+            context.MapToLive(_entities[i].Id, created[i]);
+        }
+
+        var resolver = new ReportingResolver(references, warnings);
+        using var _ = context.Enter();
+        for (var i = 0; i < _entities.Count; i++)
+        {
+            var entity = created[i];
+            MissingComponents? missing = null;
+            foreach (var component in plans[i])
+            {
+                var reason = component.Info is { } info
+                    ? TryLoad(world, entity, info, component.Record.Value, resolver, out var failure)
+                        ? null
+                        : failure
+                    : component.Reason;
+                if (reason is null)
+                {
                     continue;
                 }
 
-                if (info.Size == 0)
+                if (component.Info is { } unloaded)
                 {
-                    continue;
+                    world.RemoveComponent(entity, unloaded.Id);
                 }
 
-                var value = info.Size <= scratch.Length ? scratch[..info.Size] : new byte[info.Size];
-                component.Value.AsSpan().CopyTo(value);
-                ComponentTypeRegistry.RemapEntityFields(type, value, map);
-                world.SetComponent(entity, type, value);
+                missing ??= new MissingComponents();
+                missing.Add(new MissingComponent(component.Record.TypeId, component.Record.Value, reason));
+                warnings.Add($"{entity}: component {component.Record.TypeId} was kept aside: {reason}");
+            }
+
+            if (missing is null)
+            {
+                continue;
+            }
+
+            // Created with the entity when a type was already known to be missing; added now when
+            // only reading the value failed.
+            if (world.HasComponent<MissingComponents>(entity))
+            {
+                world.SetManagedComponent(entity, missing);
+            }
+            else
+            {
+                world.AddManagedComponent(entity, missing);
             }
         }
 
         return created;
     }
 
-    private static ComponentTypeId Resolve(string serializedTypeId)
+    /// <summary>Which of a record's components can be created, and why the others cannot.</summary>
+    private static List<ComponentPlan> Plan(EntityRecord record)
     {
-        if (!ComponentTypeRegistry.TryResolveBySerializedTypeId(serializedTypeId, out var type))
+        var plan = new List<ComponentPlan>(record.Components.Count);
+        var seen = new HashSet<ComponentTypeId>();
+        foreach (var component in record.Components)
         {
-            throw new EntitySceneException(
-                $"No component type is registered under the serialized type id {serializedTypeId}. "
-                + "Component types must carry [Component] so they register when their assembly loads.");
+            if (!ComponentTypeRegistry.TryResolveBySerializedTypeId(component.TypeId, out var type))
+            {
+                plan.Add(new ComponentPlan(component, null,
+                    "no component type is registered under this id (was its script deleted or renamed?)"));
+                continue;
+            }
+
+            if (!seen.Add(type) || type == ComponentType<MissingComponents>.Id)
+            {
+                continue;
+            }
+
+            plan.Add(new ComponentPlan(component, ComponentTypeRegistry.GetInfo(type), null));
         }
 
-        return type;
+        return plan;
     }
 
-    /// <summary>A scene holds no object references today, so nothing should ask to resolve one.</summary>
-    private sealed class NoReferences : ISerializedObjectResolver
+    /// <summary>Reads one component's value into the entity. On failure, returns why.</summary>
+    private static bool TryLoad(World world, Entity entity, ComponentTypeInfo info, byte[]? node,
+        ISerializedObjectResolver resolver, out string? failure)
     {
-        public static readonly NoReferences Instance = new();
+        failure = null;
+        try
+        {
+            if (info.IsManaged)
+            {
+                var instance = Activator.CreateInstance(info.Type) as ISerializable ?? throw new EntitySceneException(
+                    $"{info.Type} does not implement ISerializable.");
+                if (node is not null)
+                {
+                    var deserializer = YamlDeserializer.OverNode(node, resolver);
+                    if (deserializer.TryBeginStruct(NodeId, ""u8))
+                    {
+                        instance.Deserialize(ref deserializer);
+                        deserializer.EndStruct();
+                    }
+                }
 
+                world.SetManagedComponent(entity, info.Id, instance);
+                return true;
+            }
+
+            if (info.Size == 0 || node is null)
+            {
+                return true; // a tag, or a value written before the component had fields: default
+            }
+
+            var reader = info.ValueSerializer ?? throw new EntitySceneException(
+                $"{info.Type} has no value serializer. Mark it [Component] and [AutoSerialization].");
+            var value = new byte[info.Size];
+            var valueDeserializer = YamlDeserializer.OverNode(node, resolver);
+            reader.Deserialize(ref valueDeserializer, NodeId, ""u8, value);
+            world.SetComponent(entity, info.Id, value);
+            return true;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            failure = $"its value does not read as {info.Type.Name} ({ex.Message})";
+            return false;
+        }
+    }
+
+    private delegate void NodeWriter(ref YamlSerializer serializer);
+
+    private readonly record struct ComponentPlan(ComponentRecord Record, ComponentTypeInfo? Info, string? Reason);
+
+    /// <summary>Resolves through the given resolver and reports references that come back empty.</summary>
+    private sealed class ReportingResolver(ISerializedObjectResolver? inner, ICollection<string> warnings)
+        : ISerializedObjectResolver
+    {
         public ISerializableObject? Resolve(GlobalId id)
         {
-            return null;
+            if (id.ScopeId.Value == Guid.Empty)
+            {
+                return null; // written as null
+            }
+
+            var resolved = inner?.Resolve(id);
+            if (resolved is null)
+            {
+                warnings.Add($"A reference to {id} could not be resolved and was left null.");
+            }
+
+            return resolved;
         }
     }
 
@@ -321,8 +457,13 @@ public sealed class EntityScene : ISerializableObject
     {
         private const int FieldId = 0;
         private const int FieldComponents = 1;
+        private const int FieldVersion = 2;
 
         public int Id;
+
+        /// <summary>The captured handle's version; what lets a reload restore the handle itself.</summary>
+        public int Version;
+
         public List<ComponentRecord> Components { get; } = new();
 
         public void Serialize<TSerializer>(ref TSerializer serializer)
@@ -337,6 +478,7 @@ public sealed class EntityScene : ISerializableObject
             }
 
             serializer.EndArray();
+            serializer.I32(FieldVersion, "version"u8, Version);
             serializer.EndStruct();
         }
 
@@ -360,59 +502,29 @@ public sealed class EntityScene : ISerializableObject
                 deserializer.EndArray();
             }
 
+            record.Version = deserializer.I32(FieldVersion, "version"u8);
             deserializer.EndStruct();
             return record;
         }
     }
 
     /// <summary>
-    ///     One component of one entity. An unmanaged component is held as the chunk bytes it will be
-    ///     written back as; a managed one is held as a prototype instance that
-    ///     <see cref="EntityScene.ApplyTo" /> copies, so applying a scene twice gives each entity its
-    ///     own object rather than two references to the same one.
+    ///     One component of one entity: its persisted type id and its value as written (null for a
+    ///     tag). Nothing here needs the type to exist, which is what lets a scene outlive it.
     /// </summary>
-    private readonly struct ComponentRecord
+    private readonly record struct ComponentRecord(string TypeId, byte[]? Value)
     {
         private const int FieldType = 0;
         private const int FieldValue = 1;
-
-        public ComponentRecord(string typeId, byte[] value)
-        {
-            TypeId = typeId;
-            Value = value;
-        }
-
-        public ComponentRecord(string typeId, ISerializable managed)
-        {
-            TypeId = typeId;
-            Value = [];
-            Managed = managed;
-        }
-
-        public string TypeId { get; }
-        public byte[] Value { get; }
-        public ISerializable? Managed { get; }
 
         public void Serialize<TSerializer>(ref TSerializer serializer)
             where TSerializer : ISerializer, allows ref struct
         {
             serializer.BeginStruct(0, ""u8);
             SerializerExtensions.Utf16(ref serializer, FieldType, "type"u8, TypeId);
-
-            var info = ComponentTypeRegistry.GetInfo(Resolve(TypeId));
-            if (Managed is { } managed)
+            if (Value is not null)
             {
-                // Inline rather than as an object reference, so the scene file stays readable and
-                // self-contained.
-                serializer.BeginStruct(FieldValue, "value"u8);
-                managed.Serialize(ref serializer);
-                serializer.EndStruct();
-            }
-            else if (info.Size > 0)
-            {
-                var writer = info.ValueSerializer ?? throw new EntitySceneException(
-                    $"{info.Type} has no registered value serializer. Mark it [Component] and [AutoSerialization].");
-                writer.Serialize(ref serializer, FieldValue, "value"u8, Value);
+                serializer.RawNode(FieldValue, "value"u8, Value);
             }
 
             serializer.EndStruct();
@@ -423,83 +535,13 @@ public sealed class EntityScene : ISerializableObject
         {
             if (!deserializer.TryBeginStruct(0, ""u8))
             {
-                return new ComponentRecord("", []);
+                return new ComponentRecord("", null);
             }
 
             var typeId = DeserializerExtensions.String(ref deserializer, FieldType, "type"u8);
-
-            // The value is read into this run's shape, which is what makes a changed field list load.
-            var info = ComponentTypeRegistry.GetInfo(Resolve(typeId));
-            ComponentRecord record;
-            if (info.IsManaged)
-            {
-                var managed = NewManaged(info);
-                if (deserializer.TryBeginStruct(FieldValue, "value"u8))
-                {
-                    managed.Deserialize(ref deserializer);
-                    deserializer.EndStruct();
-                }
-
-                record = new ComponentRecord(typeId, managed);
-            }
-            else
-            {
-                var value = info.Size == 0 ? [] : new byte[info.Size];
-                if (info.Size > 0)
-                {
-                    var reader = info.ValueSerializer ?? throw new EntitySceneException(
-                        $"{info.Type} has no registered value serializer. Mark it [Component] and [AutoSerialization].");
-                    reader.Deserialize(ref deserializer, FieldValue, "value"u8, value);
-                }
-
-                record = new ComponentRecord(typeId, value);
-            }
-
+            var value = deserializer.RawNode(FieldValue, "value"u8);
             deserializer.EndStruct();
-            return record;
-        }
-
-        /// <summary>
-        ///     A fresh copy of the prototype, so each application of the scene owns its instance, and
-        ///     so its entity fields are rewritten: the copy goes out through the serializer and back,
-        ///     and the ambient <see cref="EntitySerializationContext" /> decides what an entity handle
-        ///     means on each side.
-        /// </summary>
-        public object CloneManaged(ComponentTypeInfo info)
-        {
-            var prototype = Managed ?? throw new InvalidOperationException("Not a managed component.");
-
-            var writer = new ArrayBufferWriter<byte>();
-            var emitter = new Utf8YamlEmitter(writer);
-            var serializer = new YamlSerializer(emitter);
-            serializer.BeginObject(default, info.Type);
-            prototype.Serialize(ref serializer);
-            serializer.EndObject();
-
-            var parser = new YamlParser(new ReadOnlySequence<byte>(writer.WrittenMemory));
-            var deserializer = new YamlDeserializer(parser, NoReferences.Instance);
-            deserializer.TryBeginObject(out _, out _);
-            var clone = NewManaged(info);
-            clone.Deserialize(ref deserializer);
-            return clone;
-        }
-
-        /// <summary>The prototype with its live entity handles replaced by the scene's placeholders.</summary>
-        public ComponentRecord Detached(ComponentTypeInfo info)
-        {
-            return new ComponentRecord(TypeId, (ISerializable)CloneManaged(info));
-        }
-
-        private static ISerializable NewManaged(ComponentTypeInfo info)
-        {
-            if (Activator.CreateInstance(info.Type) is not ISerializable instance)
-            {
-                throw new EntitySceneException(
-                    $"{info.Type} is a managed component that does not implement ISerializable, so it cannot be loaded. "
-                    + "Derive it from SerializableObject and mark it [AutoSerialization].");
-            }
-
-            return instance;
+            return new ComponentRecord(typeId, value);
         }
     }
 }

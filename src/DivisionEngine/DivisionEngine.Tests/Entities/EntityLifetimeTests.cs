@@ -102,5 +102,48 @@ public sealed class EntityLifetimeTests
         world.Dispose();
         Assert.That(() => world.CreateEntity(), Throws.TypeOf<ObjectDisposedException>());
         Assert.That(() => world.IsAlive(a), Throws.Nothing);
+        Assert.That(world.IsAlive(a), Is.False, "nothing is alive in a disposed world");
+    }
+
+    [Test]
+    public void Clear_RetiresEveryHandle()
+    {
+        using var world = new World();
+        var before = new[] { world.CreateEntity(), world.CreateEntity(), world.CreateEntity() };
+
+        world.Clear();
+        var after = new[] { world.CreateEntity(), world.CreateEntity(), world.CreateEntity() };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(before.Select(world.IsAlive), Is.All.False,
+                "a handle from before the clear must not name one of the new entities");
+            Assert.That(after, Is.Unique);
+            Assert.That(after.Intersect(before), Is.Empty);
+        });
+    }
+
+    [Test]
+    public void CreateEntityAt_BringsAHandleBack_AndTheFreeListSkipsItsIndex()
+    {
+        using var world = new World();
+        var kept = world.CreateEntity(ComponentType<Position>.Id);
+        world.CreateEntity();
+        world.Clear();
+
+        var restored = world.CreateEntityAt(kept, ComponentType<Position>.Id);
+        var beyond = world.CreateEntityAt(new Entity(10, 3));
+        var others = Enumerable.Range(0, 20).Select(_ => world.CreateEntity()).ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(restored, Is.EqualTo(kept));
+            Assert.That(world.IsAlive(kept) && world.IsAlive(beyond), Is.True);
+            Assert.That(world.HasComponent<Position>(kept), Is.True);
+            Assert.That(others.Select(e => e.Index), Is.Unique.And.No.Member(kept.Index).And.No.Member(10),
+                "indices taken by CreateEntityAt are never handed out again while in use");
+            Assert.That(world.EntityCount, Is.EqualTo(22));
+            Assert.That(() => world.CreateEntityAt(kept), Throws.InvalidOperationException, "index in use");
+        });
     }
 }

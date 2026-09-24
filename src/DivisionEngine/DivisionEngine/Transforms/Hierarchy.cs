@@ -135,11 +135,23 @@ public static class Hierarchy
         }
 
         Link(world, entity, parent);
+
+        // Propagation never visits a static subtree again, so moving one is the last chance to
+        // compute where it now is.
+        if (entityStatic)
+        {
+            TransformPropagationSystem.PropagateFrom(world, entity, ParentMatrix(world, parent));
+        }
     }
 
     /// <summary>
-    ///     Settles the subtree's <see cref="WorldTransform" /> values once and then marks it
-    ///     <see cref="Static" />, so propagation stops visiting it. Idempotent.
+    ///     Settles the subtree's <see cref="WorldTransform" /> values once and then marks every entity
+    ///     in it <see cref="Static" />, so propagation stops visiting it. Idempotent.
+    ///     <para>
+    ///         Every entity is tagged, not only this one, so that each can answer
+    ///         <see cref="IsStatic" /> and <see cref="SetParent" /> can refuse a moving child under any
+    ///         of them by looking at the tag alone.
+    ///     </para>
     /// </summary>
     /// <remarks>
     ///     Refuses an entity whose parent is not static: propagation would then skip a subtree that
@@ -169,10 +181,19 @@ public static class Hierarchy
 
         // Settle before marking: once the tag is on, nothing will compute these again.
         TransformPropagationSystem.PropagateFrom(world, entity, ParentMatrix(world, parent));
-        world.AddComponent<Static>(entity);
+        foreach (var member in Subtree(world, entity))
+        {
+            if (!world.HasComponent<Static>(member))
+            {
+                world.AddComponent<Static>(member);
+            }
+        }
     }
 
-    /// <summary>Removes <see cref="Static" />, so the next propagation picks the subtree up again. Idempotent.</summary>
+    /// <summary>
+    ///     Removes <see cref="Static" /> from the entity and everything under it, so the next
+    ///     propagation picks the subtree up again. Idempotent.
+    /// </summary>
     /// <remarks>
     ///     Refuses an entity under a static parent, which would leave a moving entity inside a
     ///     subtree propagation never descends into: it would keep a stale world transform with
@@ -194,7 +215,31 @@ public static class Hierarchy
                 "never reaches inside a static subtree. Make the parent dynamic first.");
         }
 
-        world.RemoveComponent<Static>(entity);
+        foreach (var member in Subtree(world, entity))
+        {
+            if (world.HasComponent<Static>(member))
+            {
+                world.RemoveComponent<Static>(member);
+            }
+        }
+    }
+
+    /// <summary>
+    ///     The entity and all its descendants, collected up front so that callers can make structural
+    ///     changes to them while going through the list.
+    /// </summary>
+    private static List<Entity> Subtree(World world, Entity root)
+    {
+        var members = new List<Entity> { root };
+        for (var i = 0; i < members.Count; i++)
+        {
+            foreach (var child in world.GetChildren(members[i]))
+            {
+                members.Add(child);
+            }
+        }
+
+        return members;
     }
 
     /// <summary>Whether propagation skips this entity and everything under it.</summary>
@@ -213,9 +258,25 @@ public static class Hierarchy
     /// <summary>Detaches the entity from its parent, making it a root. A no-op for entities that are already roots.</summary>
     public static void ClearParent(this World world, Entity entity)
     {
-        if (!world.HasComponent<Parent>(entity))
+        if (!Detach(world, entity))
         {
             return;
+        }
+
+        // A static subtree that becomes a root is placed relative to the world from now on, and
+        // nothing else will recompute it.
+        if (world.HasComponent<Static>(entity))
+        {
+            TransformPropagationSystem.PropagateFrom(world, entity, Matrix4x4.Identity);
+        }
+    }
+
+    /// <summary>Removes the parent link. Returns false if the entity was already a root.</summary>
+    internal static bool Detach(World world, Entity entity)
+    {
+        if (!world.HasComponent<Parent>(entity))
+        {
+            return false;
         }
 
         var parent = world.GetComponentReadOnly<Parent>(entity).Value;
@@ -226,6 +287,7 @@ public static class Hierarchy
 
         world.RemoveComponent<Parent>(entity);
         world.RemoveComponent<Sibling>(entity);
+        return true;
     }
 
     /// <summary>Appends an already-<see cref="Parent" />ed entity to the end of its parent's list.</summary>
@@ -357,6 +419,7 @@ public sealed class HierarchyIntegrity : IStructuralHook
             world.DestroyEntity(first);
         }
 
-        world.ClearParent(entity);
+        // Not ClearParent: the entity is going away, so there is no world transform to settle.
+        Hierarchy.Detach(world, entity);
     }
 }

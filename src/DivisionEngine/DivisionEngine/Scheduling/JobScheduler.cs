@@ -123,6 +123,9 @@ public sealed class JobScheduler : IDisposable
             Interlocked.Decrement(ref _live);
         }
 
+        // Pairs with the barrier in Wait / WaitAll: either the main thread sees this completion
+        // before it sleeps, or this thread sees the waiting flag and wakes it.
+        Interlocked.MemoryBarrier();
         if (hasWaiter || _mainWaiting)
         {
             _mainWake.Release();
@@ -132,7 +135,14 @@ public sealed class JobScheduler : IDisposable
     /// <summary>Records a failure to be rethrown by the next <see cref="Wait" /> / <see cref="WaitAll" /> on the main thread.</summary>
     public void ReportError(Exception error)
     {
-        (_failed ??= new ConcurrentQueue<Exception>()).Enqueue(error);
+        var failed = _failed;
+        if (failed is null)
+        {
+            Interlocked.CompareExchange(ref _failed, new ConcurrentQueue<Exception>(), null);
+            failed = _failed;
+        }
+
+        failed.Enqueue(error);
     }
 
     /// <summary>Runs jobs on the calling (main) thread until <paramref name="node" /> completes, then rethrows job failures.</summary>
@@ -141,6 +151,10 @@ public sealed class JobScheduler : IDisposable
         ThrowIfNotMainThread();
         node.MarkWaited();
         _mainWaiting = true;
+        // A volatile write may be reordered after the following volatile read. Without the barrier
+        // the completing thread could miss the flag while this one reads the node as incomplete,
+        // and the main thread would sleep with nobody left to wake it.
+        Interlocked.MemoryBarrier();
         try
         {
             while (!node.IsCompleted)
@@ -167,6 +181,7 @@ public sealed class JobScheduler : IDisposable
     {
         ThrowIfNotMainThread();
         _mainWaiting = true;
+        Interlocked.MemoryBarrier(); // see Wait
         try
         {
             while (Volatile.Read(ref _live) > 0)

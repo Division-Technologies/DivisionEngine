@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Runtime.ExceptionServices;
 
 namespace DivisionEngine;
 
@@ -23,6 +24,10 @@ public sealed class JobGraph
     private readonly List<BehaviorContext> _commandRecorders = new();
 
     private readonly List<Deferred> _completedWaiters = new();
+
+    /// <summary>Phases declared by the loop, and whether each dispatches behaviors. Empty: not checked.</summary>
+    private readonly Dictionary<PhaseId, bool> _declaredPhases = new();
+
     private readonly List<ExternalArrival> _externalArrivals = new();
     private readonly List<Deferred> _intake = new();
 
@@ -41,6 +46,7 @@ public sealed class JobGraph
 
     private readonly List<List<Parked>> _phaseQueues = new();
     private readonly ResourceTracker _tracker = new();
+    private int _checkedStructuralVersion = -1;
     private int _closedUpTo = -1;
     private bool _closing;
     private string[] _currentLabels = [];
@@ -52,6 +58,7 @@ public sealed class JobGraph
     private bool _entryOpen;
     private HashSet<ComponentTypeId>? _frozen;
     private int _nextTurnId;
+    private List<Deferred> _pendingIntake = [];
     private List<Parked> _pendingResume = [];
     private RoundState[] _rounds = [];
 
@@ -281,9 +288,11 @@ public sealed class JobGraph
     }
 
     /// <summary>
-    ///     Opens a phase: creates its rounds and, if the phase dispatches behaviors, issues the
+    ///     Opens a phase: creates its rounds and, if the phase dispatches behaviors, takes the
     ///     continuations collected since the last dispatching phase (admitted external awaits,
-    ///     deferred segments, completed-round readers, starts) in turn order.
+    ///     deferred segments, completed-round readers, starts) and the turns parked on the phase.
+    ///     Both are issued by <see cref="ResumePhase" />, after the phase's systems, so that
+    ///     "initial" means the state after the systems whatever the worker count.
     /// </summary>
     /// <param name="dispatchBehaviors">
     ///     False for phases in which no behavior segment runs (physics, transform propagation,
@@ -293,7 +302,6 @@ public sealed class JobGraph
     public void BeginPhase(PhaseId phase, bool dispatchBehaviors = true,
         IReadOnlyCollection<ComponentTypeId>? frozenTypes = null)
     {
-        List<Deferred> deferred;
         using (_issueLock.EnterScope())
         {
             if (_currentPhase is not null)
@@ -317,18 +325,55 @@ public sealed class JobGraph
             // behavior whose first segment is issued from the intake below) resume at the next occurrence,
             // so what ResumePhase resumes does not depend on how fast segments happen to run.
             _pendingResume = dispatchBehaviors ? TakeParkedLocked(phase) : [];
-            deferred = dispatchBehaviors ? TakeIntakeLocked() : [];
+            _pendingIntake = dispatchBehaviors ? TakeIntakeLocked() : [];
+            if (dispatchBehaviors)
+            {
+                CancelDetachedTurnsLocked();
+            }
         }
-
-        IssueDeferred(deferred);
     }
 
     /// <summary>
-    ///     Resumes the behaviors that were parked on <paramref name="phase" /> when it began, in turn
-    ///     order, then closes the phase for entry so that rounds can start closing.
+    ///     Cancels the turns whose behavior component has been removed from its entity, or replaced
+    ///     by another instance, so that they do not resume. Without this, removing a behavior would
+    ///     leave its turn running, and adding it back would run a second turn on the same entity.
+    ///     <para>
+    ///         Done here because this is a point where the world is quiescent and nothing is resumed
+    ///         yet: a segment itself may not read the structure. It only runs when the structure has
+    ///         changed since the last check.
+    ///     </para>
+    /// </summary>
+    private void CancelDetachedTurnsLocked()
+    {
+        var version = World.StructuralVersion;
+        if (version == _checkedStructuralVersion)
+        {
+            return;
+        }
+
+        _checkedStructuralVersion = version;
+        List<BehaviorContext>? detached = null;
+        foreach (var context in _liveTurns)
+        {
+            if (!context.IsCancelled && context.IsDetached())
+            {
+                context.Cancel();
+                (detached ??= []).Add(context);
+            }
+        }
+
+        ForgetTurnsLocked(detached);
+    }
+
+    /// <summary>
+    ///     Issues what <see cref="BeginPhase" /> took — the intake, then the behaviors that were
+    ///     parked on <paramref name="phase" /> when it began, each in turn order — then closes the
+    ///     phase for entry so that rounds can start closing. Called once the phase's systems are
+    ///     scheduled, so that the tracker orders the segments' reads after the systems' writes.
     /// </summary>
     public void ResumePhase(PhaseId phase)
     {
+        List<Deferred> intake;
         List<Parked> parked;
         using (_issueLock.EnterScope())
         {
@@ -338,21 +383,30 @@ public sealed class JobGraph
                     $"Phase {phase} is not open (current: {_currentPhase?.ToString() ?? "none"}).");
             }
 
+            intake = _pendingIntake;
+            _pendingIntake = [];
             parked = _pendingResume;
             _pendingResume = [];
         }
 
+        IssueDeferred(intake);
+
+        List<BehaviorContext>? cancelled = null;
         parked.Sort(static (a, b) => a.Context.TurnId.CompareTo(b.Context.TurnId));
         foreach (var entry in parked)
         {
-            if (!entry.Context.IsCancelled)
+            if (entry.Context.IsCancelled)
             {
-                IssueSegment(entry.Context, AccessSet.None, entry.Continuation, null, null);
+                (cancelled ??= []).Add(entry.Context);
+                continue;
             }
+
+            IssueSegment(entry.Context, AccessSet.None, entry.Continuation, null, null);
         }
 
         using (_issueLock.EnterScope())
         {
+            ForgetTurnsLocked(cancelled);
             _entryOpen = false;
             TryCloseRoundsLocked();
         }
@@ -372,8 +426,15 @@ public sealed class JobGraph
 
     /// <summary>
     ///     Closes the phase: waits for every job and segment, closes the remaining rounds, commits
-    ///     the buffered writes on the calling (main) thread, and queues completed-round readers for
-    ///     the next phase.
+    ///     the buffered writes on the calling (main) thread, applies the recorded structural changes,
+    ///     and queues completed-round readers for the next phase.
+    ///     <para>
+    ///         A failing job or behavior does not stop the phase from closing: the others' writes and
+    ///         structural changes are still applied, and the failures are rethrown once the phase is
+    ///         closed. If <see cref="ResumePhase" /> was never reached (a system threw while being
+    ///         scheduled), what <see cref="BeginPhase" /> took is put back, so the parked turns resume
+    ///         at the next occurrence of the phase instead of being lost.
+    ///     </para>
     /// </summary>
     public void EndPhase()
     {
@@ -390,16 +451,17 @@ public sealed class JobGraph
             frozen = _frozen;
         }
 
+        var errors = new List<Exception>();
         try
         {
             // Let chains run to quiescence first (bounded by MaxSegmentsPerPhase); only then refuse new issues.
-            WaitAll();
+            WaitAllCollecting(errors);
             using (_issueLock.EnterScope())
             {
                 _closing = true;
             }
 
-            WaitAll();
+            WaitAllCollecting(errors);
             using (_issueLock.EnterScope())
             {
                 _entryOpen = false;
@@ -408,12 +470,13 @@ public sealed class JobGraph
             }
 
             Commit(rounds, frozen);
-            ApplyStructuralChanges();
+            ApplyStructuralChanges(errors);
         }
         finally
         {
             using (_issueLock.EnterScope())
             {
+                RestoreUndispatchedLocked();
                 _intake.AddRange(_completedWaiters);
                 _completedWaiters.Clear();
                 _currentPhase = null;
@@ -422,6 +485,46 @@ public sealed class JobGraph
                 _rounds = [];
                 _closing = false;
             }
+        }
+
+        switch (errors.Count)
+        {
+            case 0:
+                return;
+            case 1:
+                ExceptionDispatchInfo.Throw(errors[0]);
+                break;
+            default:
+                throw new AggregateException(errors);
+        }
+    }
+
+    /// <summary>A wait that has thrown has also drained the pool, so the phase can go on closing.</summary>
+    private void WaitAllCollecting(List<Exception> errors)
+    {
+        try
+        {
+            WaitAll();
+        }
+        catch (JobFailedException ex)
+        {
+            errors.Add(ex);
+        }
+    }
+
+    /// <summary>Puts back the intake and parked turns taken by <see cref="BeginPhase" /> that were never issued.</summary>
+    private void RestoreUndispatchedLocked()
+    {
+        if (_pendingIntake.Count > 0)
+        {
+            _intake.AddRange(_pendingIntake);
+            _pendingIntake = [];
+        }
+
+        if (_pendingResume.Count > 0 && _currentPhase is { } phase)
+        {
+            _phaseQueues[phase.Value].AddRange(_pendingResume);
+            _pendingResume = [];
         }
     }
 
@@ -438,12 +541,15 @@ public sealed class JobGraph
     ///         writes. Recording into one shared buffer would instead follow whichever segment ran
     ///         first.
     ///     </para>
+    ///     A buffer that fails part-way has still applied its other commands (see
+    ///     <see cref="EntityCommandBuffer.Playback" />); the failure is collected and the remaining
+    ///     buffers are played back all the same.
     /// </summary>
-    private void ApplyStructuralChanges()
+    private void ApplyStructuralChanges(List<Exception> errors)
     {
         if (!Commands.IsEmpty)
         {
-            Commands.Playback(World);
+            PlaybackCollecting(Commands, errors);
         }
 
         List<BehaviorContext> recorders;
@@ -461,7 +567,22 @@ public sealed class JobGraph
         recorders.Sort(static (a, b) => a.TurnId.CompareTo(b.TurnId));
         foreach (var context in recorders)
         {
-            context.TakeRecordedCommands()?.Playback(World);
+            if (context.TakeRecordedCommands() is { } commands)
+            {
+                PlaybackCollecting(commands, errors);
+            }
+        }
+    }
+
+    private void PlaybackCollecting(EntityCommandBuffer buffer, List<Exception> errors)
+    {
+        try
+        {
+            buffer.Playback(World);
+        }
+        catch (Exception ex)
+        {
+            errors.Add(ex);
         }
     }
 
@@ -540,12 +661,34 @@ public sealed class JobGraph
     ///     Starts <paramref name="behavior" /> for <paramref name="entity" />. The first segment (no data
     ///     access) is issued at the next <see cref="BeginPhase" /> in turn order, never immediately, so
     ///     when a behavior first runs does not depend on the worker count. The behavior is cancelled
-    ///     when the entity is destroyed.
+    ///     when the entity is destroyed, when it fails, and — if it was started as a component — when
+    ///     that component is removed.
     /// </summary>
+    /// <remarks>
+    ///     Main thread only: turn ids decide commit order, so they have to be handed out in an order
+    ///     that does not depend on timing. A behavior that wants to start another adds it as a
+    ///     component through <see cref="BehaviorContext.Commands" />.
+    /// </remarks>
     public BehaviorContext Start(Entity entity, Behavior behavior, string? name = null)
     {
+        return Start(entity, behavior, null, name);
+    }
+
+    /// <param name="attachedAs">
+    ///     The component type <paramref name="behavior" /> is attached as. The turn is cancelled once
+    ///     the entity no longer holds this instance under that type.
+    /// </param>
+    internal BehaviorContext Start(Entity entity, Behavior behavior, ComponentTypeId? attachedAs,
+        string? name = null)
+    {
         ArgumentNullException.ThrowIfNull(behavior);
-        var context = new BehaviorContext(this, entity, behavior, Interlocked.Increment(ref _nextTurnId),
+        if (Environment.CurrentManagedThreadId != Scheduler.MainThreadId)
+        {
+            throw new InvalidOperationException(
+                "Behaviors are started from the main thread; from a behavior, add one as a component through Commands.");
+        }
+
+        var context = new BehaviorContext(this, entity, behavior, ++_nextTurnId, attachedAs,
             name ?? behavior.GetType().Name);
         behavior.Context = context;
         using (_issueLock.EnterScope())
@@ -685,6 +828,37 @@ public sealed class JobGraph
         }
 
         node.Release();
+    }
+
+    /// <summary>
+    ///     Declares a phase of the loop that drives this graph, and whether it dispatches behaviors.
+    ///     Once any phase is declared, a behavior that awaits a phase not declared as dispatching fails
+    ///     at the await, rather than waiting for a resume that never comes.
+    /// </summary>
+    public void DeclarePhase(PhaseId phase, bool dispatchesBehaviors)
+    {
+        using (_issueLock.EnterScope())
+        {
+            _declaredPhases[phase] = dispatchesBehaviors;
+        }
+    }
+
+    internal void ThrowIfCannotPark(PhaseId phase)
+    {
+        bool known;
+        using (_issueLock.EnterScope())
+        {
+            if (_declaredPhases.Count == 0 || _declaredPhases.GetValueOrDefault(phase))
+            {
+                return;
+            }
+
+            known = _declaredPhases.ContainsKey(phase);
+        }
+
+        throw new InvalidOperationException(known
+            ? $"Phase {phase} does not dispatch behaviors, so a behavior waiting for it would never resume."
+            : $"Phase {phase} is not part of the loop, so a behavior waiting for it would never resume.");
     }
 
     /// <summary>Parks a continuation until <see cref="ResumePhase" /> is called for <paramref name="phase" />.</summary>
@@ -871,13 +1045,42 @@ public sealed class JobGraph
             return;
         }
 
+        List<BehaviorContext>? cancelled = null;
         deferred.Sort(static (a, b) => a.Context.TurnId.CompareTo(b.Context.TurnId));
         foreach (var entry in deferred)
         {
-            if (!entry.Context.IsCancelled)
+            if (entry.Context.IsCancelled)
             {
-                IssueSegment(entry.Context, entry.Access, entry.Continuation, entry.Handle, entry.WaitRound);
+                (cancelled ??= []).Add(entry.Context);
+                continue;
             }
+
+            IssueSegment(entry.Context, entry.Access, entry.Continuation, entry.Handle, entry.WaitRound);
+        }
+
+        if (cancelled is not null)
+        {
+            using (_issueLock.EnterScope())
+            {
+                ForgetTurnsLocked(cancelled);
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Drops turns that were cancelled while waiting. Their continuation is discarded here instead
+    ///     of running a segment, so <see cref="OnSegmentEnded" /> would never prune them.
+    /// </summary>
+    private void ForgetTurnsLocked(List<BehaviorContext>? cancelled)
+    {
+        if (cancelled is null)
+        {
+            return;
+        }
+
+        foreach (var context in cancelled)
+        {
+            _liveTurns.Remove(context);
         }
     }
 

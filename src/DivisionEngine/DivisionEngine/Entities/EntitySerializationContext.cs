@@ -57,6 +57,7 @@ public sealed class EntitySerializationContext
     /// <summary>The placeholder handle standing for a scene-local entity id.</summary>
     public static Entity PlaceholderFor(int id)
     {
+        ArgumentOutOfRangeException.ThrowIfNegative(id);
         return new Entity(-1 - id, 0);
     }
 
@@ -99,9 +100,10 @@ public sealed class EntitySerializationContext
 
     private static void ThrowIfReserved(int id)
     {
-        if (id == NullId)
+        if (id < 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(id), $"{NullId} is reserved for the null entity.");
+            throw new ArgumentOutOfRangeException(nameof(id),
+                $"Entity ids are not negative; {NullId} is reserved for the null entity.");
         }
     }
 
@@ -118,6 +120,11 @@ public sealed class EntitySerializationContext
     /// <summary>The entity an id refers to, or <see cref="Entity.Null" /> if the scene did not contain it.</summary>
     public Entity ToLive(int id)
     {
+        if (id < 0)
+        {
+            return Entity.Null; // no valid id is negative; a corrupt file must not produce a real handle
+        }
+
         if (_loading)
         {
             return PlaceholderFor(id);

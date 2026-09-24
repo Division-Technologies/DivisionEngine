@@ -38,6 +38,15 @@ public static class Profiler
     private static readonly Lock Gate = new();
     private static readonly ConcurrentDictionary<string, nint> Names = new();
     private static readonly ConcurrentDictionary<(nint Site, string Name), nint> ZoneSources = new();
+
+    /// <summary>
+    ///     Taken only on a cache miss, so that each name is allocated exactly once: GetOrAdd may run
+    ///     its factory on every racing thread, and the native strings of the losers would leak.
+    /// </summary>
+    private static readonly Lock InternGate = new();
+
+    /// <summary>Kept separately because ConcurrentDictionary.Count takes every bucket lock.</summary>
+    private static int _zoneSourceCount;
     private static bool _started;
     private static bool _startedHere;
 #endif
@@ -137,6 +146,13 @@ public static class Profiler
                     "It was most likely built without TRACY_ENABLE or TRACY_MANUAL_LIFETIME.";
                 return false;
             }
+            catch (BadImageFormatException ex)
+            {
+                UnavailableReason =
+                    $"The DivisionTracy native library could not be loaded ({ex.Message}). " +
+                    "It was most likely built for another architecture than this process.";
+                return false;
+            }
 
             UnavailableReason = null;
             AreLocksVisible = Environment.GetEnvironmentVariable("DIVISION_PROFILING_LOCKS") != "0";
@@ -150,6 +166,12 @@ public static class Profiler
     }
 
     /// <summary>Stops the profiler and flushes pending data. Idempotent.</summary>
+    /// <remarks>
+    ///     For the end of the process only, once nothing else runs: no worker, no scheduler, no
+    ///     engine. Threads that are inside a zone or a <see cref="ProfiledLock" /> when the client is
+    ///     destroyed would call into it afterwards, and a profiled lock keeps the context it
+    ///     announced to the capture. Starting the profiler again after this is not supported.
+    /// </remarks>
     public static void Shutdown()
     {
 #if DIVISION_PROFILING
@@ -218,13 +240,25 @@ public static class Profiler
 #if DIVISION_PROFILING
         // Interned, not merely cached: the profiler identifies a frame or plot series by the
         // pointer, so handing out two pointers for one name would split it into two series.
-        return new ProfilerName(Names.GetOrAdd(name, static key =>
+        if (Names.TryGetValue(name, out var interned))
         {
-            unsafe
+            return new ProfilerName(interned);
+        }
+
+        lock (InternGate)
+        {
+            if (!Names.TryGetValue(name, out interned))
             {
-                return (nint)AllocUtf8(key);
+                unsafe
+                {
+                    interned = (nint)AllocUtf8(name);
+                }
+
+                Names[name] = interned;
             }
-        }));
+
+            return new ProfilerName(interned);
+        }
 #else
         _ = name;
         return default;
@@ -350,19 +384,11 @@ public static class Profiler
         // (TransformPropagation is both), and keying on the name alone would collapse the two
         // into whichever source location happened to be interned first.
         var key = (shared.Handle, name);
-        if (!ZoneSources.TryGetValue(key, out var handle))
+        if (!ZoneSources.TryGetValue(key, out var handle) && !TryInternZoneSource(key, shared, out handle))
         {
-            if (ZoneSources.Count >= MaxInternedZoneSources)
-            {
-                var fallback = Zone(shared);
-                fallback.Name(name);
-                return fallback;
-            }
-
-            // The factory form, so a race adds one source location rather than allocating one
-            // per racing thread and dropping all but the winner.
-            var origin = shared;
-            handle = ZoneSources.GetOrAdd(key, k => Derive(k.Name, origin));
+            var fallback = Zone(shared);
+            fallback.Name(name);
+            return fallback;
         }
 
         unsafe
@@ -375,6 +401,38 @@ public static class Profiler
         return default;
 #endif
     }
+
+#if DIVISION_PROFILING
+    /// <summary>Interns a source location for a named zone, unless the cap is reached.</summary>
+    private static bool TryInternZoneSource((nint Site, string Name) key, in ProfilerZoneSource shared, out nint handle)
+    {
+        // Checked before locking too: past the cap, which is exactly when names are being made up
+        // per entity or per frame, every zone would otherwise queue on the lock.
+        if (Volatile.Read(ref _zoneSourceCount) >= MaxInternedZoneSources)
+        {
+            handle = 0;
+            return false;
+        }
+
+        lock (InternGate)
+        {
+            if (ZoneSources.TryGetValue(key, out handle))
+            {
+                return true;
+            }
+
+            if (_zoneSourceCount >= MaxInternedZoneSources)
+            {
+                return false;
+            }
+
+            handle = Derive(key.Name, shared);
+            ZoneSources[key] = handle;
+            Volatile.Write(ref _zoneSourceCount, _zoneSourceCount + 1);
+            return true;
+        }
+    }
+#endif
 
     /// <summary>Names the calling thread in the capture. Call once per thread, as early as possible.</summary>
     public static void SetThreadName(string name)

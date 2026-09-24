@@ -53,11 +53,16 @@ internal static class MemoryPlots
         // Bytes allocated since the process started, which only ever grows; the interesting figure
         // is how much this frame added, and a frame that suddenly allocates ten times its usual
         // share is the kind of thing a total hides completely.
+        // The first sample has no previous frame to compare with; the total so far would read as
+        // one enormous frame. (GetGCMemoryInfo below allocates a little itself, which shows up as a
+        // small constant in the next frame's figure.)
         var allocated = GC.GetTotalAllocatedBytes(false);
-        var delta = allocated - _lastAllocated;
-        _lastAllocated = allocated;
+        if (_lastAllocated != 0)
+        {
+            Profiler.Plot(AllocatedPerFrame, allocated - _lastAllocated);
+        }
 
-        Profiler.Plot(AllocatedPerFrame, delta);
+        _lastAllocated = allocated;
         Profiler.Plot(ManagedHeap, GC.GetTotalMemory(false));
         Profiler.Plot(ManagedCommitted, GC.GetGCMemoryInfo().TotalCommittedBytes);
 

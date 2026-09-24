@@ -7,9 +7,9 @@ using Microsoft.Extensions.Logging.Abstractions;
 // rotation into their world transforms during PhaseId.TransformPropagation.
 // There is no window yet, so the frame loop is driven headless and the result is printed.
 
-const int frames = 24;
+const int frames = 24 * 100;
 const double frameSeconds = 1.0 / 12.0;
-const int children = 3;
+const int children = 3 * 100;
 
 using var engine = new Engine(NullLogger.Instance);
 var world = engine.World;

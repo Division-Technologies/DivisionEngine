@@ -14,7 +14,8 @@ namespace DivisionEngine;
 ///     </para>
 ///     <para>
 ///         <c>ref T</c> is a write, <c>in T</c> is a read. An <see cref="Entity" /> parameter receives
-///         the entity, and an <c>in JobContext</c> parameter the frame's time and world. Components
+///         the entity, and a <c>JobContext</c> parameter the frame's time and world; both may be taken
+///         by value, <c>in</c> or <c>ref readonly</c>. Components
 ///         that only filter — tags in particular, which have no data to pass — go in
 ///         <see cref="WithAllAttribute" />, <see cref="WithAnyAttribute" /> and
 ///         <see cref="WithNoneAttribute" />.

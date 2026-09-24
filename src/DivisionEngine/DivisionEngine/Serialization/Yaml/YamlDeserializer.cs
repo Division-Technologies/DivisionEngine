@@ -248,6 +248,24 @@ internal ref struct YamlDeserializer(
         EndStruct();
     }
 
+    public byte[]? RawNode(int id, ReadOnlySpan<byte> hintUtf8)
+    {
+        return TryRead(id, hintUtf8) ? YamlNodeCopy.Capture(ref _parser) : null;
+    }
+
+    /// <summary>
+    ///     A deserializer over a node captured by <see cref="RawNode" />. The next field read, whatever
+    ///     its id, reads that node: framed like an element of a sequence, which carries no keys.
+    /// </summary>
+    public static YamlDeserializer OverNode(ReadOnlyMemory<byte> node, ISerializedObjectResolver? resolver,
+        ITypeResolver? typeResolver = null)
+    {
+        var deserializer = new YamlDeserializer(YamlNodeCopy.Open(node), resolver, typeResolver);
+        deserializer._modes = new Stack<YamlSerializationModeKind>();
+        deserializer._modes.Push(YamlSerializationModeKind.Sequence);
+        return deserializer;
+    }
+
     public bool TryBeginStruct(int id, ReadOnlySpan<byte> hintUtf8)
     {
         if (!TryRead(id, hintUtf8))

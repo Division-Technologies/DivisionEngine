@@ -37,10 +37,6 @@ using AssemblyId = std::uintptr_t;
 using ThreadId = std::uintptr_t;
 using MdToken = std::uint32_t;
 
-/// The client id a FunctionIDMapper hands back, which the enter/leave hooks then receive in place
-/// of the FunctionID. Ours is a pointer to an interned zone call site, so the hooks do no lookup.
-using ClientId = std::uintptr_t;
-
 /// CorOpenFlags::ofRead - metadata opened for reading only.
 inline constexpr Dword kOpenForRead = 0;
 
@@ -117,5 +113,12 @@ enum GcReason : Dword {
 /// variadic declaration would be the wrong ABI. A narrower fixed signature is safe under both
 /// AAPCS and SysV, since neither requires the callee to know about arguments it ignores.
 using UnusedSlot = Hresult(DIVISION_STDCALL*)(void* self);
+
+// The one ABI where that reasoning fails: a 32-bit __stdcall callee pops its own arguments, so a
+// narrower signature would leave the caller's stack unbalanced. Every other target has one calling
+// convention and the caller cleans up.
+#if defined(_WIN32) && !defined(_WIN64)
+#error "32-bit Windows is not supported: UnusedSlot's narrower signature would unbalance the stack under __stdcall."
+#endif
 
 }  // namespace division::clr

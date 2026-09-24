@@ -150,6 +150,37 @@ public sealed class TransformPropagationTests
     }
 
     [Test]
+    public void ARootWithoutTransformComponents_PlacesItsChildrenRelativeToTheWorld()
+    {
+        using var engine = new Engine(NullLogger.Instance, new JobScheduler(2));
+        var world = engine.World;
+        var group = world.CreateEntity();
+        var child = world.CreateTransform(LocalTransform.FromPosition(new Vector3(1, 0, 0)));
+        world.SetParent(child, group);
+        Propagate(engine);
+
+        world.GetComponent<LocalTransform>(child).Position = new Vector3(4, 0, 0);
+        Propagate(engine, 0.01);
+
+        AssertPosition(WorldPosition(world, child), new Vector3(4, 0, 0), "follows its local transform");
+    }
+
+    [Test]
+    public void ARootWithOnlyALocalTransform_StillPropagatesToItsChildren()
+    {
+        using var engine = new Engine(NullLogger.Instance, new JobScheduler(2));
+        var world = engine.World;
+        var root = world.CreateEntity(ComponentType<LocalTransform>.Id);
+        world.GetComponent<LocalTransform>(root) = LocalTransform.FromPosition(new Vector3(10, 0, 0));
+        var child = world.CreateTransform(LocalTransform.FromPosition(new Vector3(1, 0, 0)));
+        world.SetParent(child, root);
+
+        Propagate(engine);
+
+        AssertPosition(WorldPosition(world, child), new Vector3(11, 0, 0), "composed with the root's local");
+    }
+
+    [Test]
     public void DeepAndWideHierarchies_PropagateAcrossWorkers()
     {
         using var engine = new Engine(NullLogger.Instance, new JobScheduler(4));

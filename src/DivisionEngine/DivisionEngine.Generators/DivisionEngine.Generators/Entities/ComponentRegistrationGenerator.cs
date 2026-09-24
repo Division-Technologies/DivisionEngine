@@ -35,10 +35,6 @@ public sealed class ComponentRegistrationGenerator : IIncrementalGenerator
 {
     private const string ComponentAttributeFullName = "DivisionEngine.ComponentAttribute";
     private const string AutoSerializationAttributeFullName = "DivisionEngine.AutoSerializationAttribute";
-    private const string EntityFullName = "DivisionEngine.Entity";
-
-    /// <summary>Depth limit for the walk into nested structs looking for entity fields.</summary>
-    private const int MaxNesting = 8;
 
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
@@ -68,10 +64,12 @@ public sealed class ComponentRegistrationGenerator : IIncrementalGenerator
         var isSerializable = symbol.GetAttributes().Any(static a =>
             a.AttributeClass?.ToDisplayString() == AutoSerializationAttributeFullName);
 
+        // Entities the generated code cannot assign are left alone here and reported by
+        // ComponentConventionAnalyzer instead.
         var entityFields = new List<string>();
         if (isUnmanagedStruct)
         {
-            CollectEntityFields(symbol, "value", entityFields, 0);
+            EntityFields.Collect(symbol, "value", entityFields, null);
         }
 
         return new ComponentRegistrationInfo(
@@ -101,37 +99,6 @@ public sealed class ComponentRegistrationGenerator : IIncrementalGenerator
         return symbol.GetMembers()
             .OfType<IFieldSymbol>()
             .Where(static f => !f.IsStatic && !f.IsConst);
-    }
-
-    /// <summary>
-    ///     Records an access path per <c>Entity</c> field, descending into nested structs so an entity
-    ///     held one or more structs deep is still rewritten.
-    /// </summary>
-    private static void CollectEntityFields(INamedTypeSymbol symbol, string path, List<string> into, int depth)
-    {
-        if (depth > MaxNesting)
-        {
-            return;
-        }
-
-        foreach (var field in InstanceFields(symbol))
-        {
-            // A private field of a nested struct cannot be reached from generated code.
-            if (field.DeclaredAccessibility is not (Accessibility.Public or Accessibility.Internal))
-            {
-                continue;
-            }
-
-            var fieldType = field.Type;
-            if (fieldType.ToDisplayString() == EntityFullName)
-            {
-                into.Add($"{path}.{field.Name}");
-            }
-            else if (fieldType is INamedTypeSymbol { IsValueType: true } nested && !nested.IsGenericType)
-            {
-                CollectEntityFields(nested, $"{path}.{field.Name}", into, depth + 1);
-            }
-        }
     }
 
     private static string SafeName(INamedTypeSymbol symbol)

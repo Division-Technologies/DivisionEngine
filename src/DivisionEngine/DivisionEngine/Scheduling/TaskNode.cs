@@ -131,7 +131,21 @@ internal sealed class TaskNode
 
     private void Ready()
     {
-        var work = Prepare();
+        int work;
+        try
+        {
+            work = Prepare();
+        }
+        catch (Exception ex)
+        {
+            // A failing item count fails the node like a failing body would: recorded, rethrown by
+            // the next wait, and the node still completes so that its successors and waits are
+            // released. Ready runs on whichever thread released the last dependency, a worker
+            // included, so letting the exception escape would take that thread down.
+            Fail(ex);
+            work = 0;
+        }
+
         if (work == 0)
         {
             Complete();
@@ -211,12 +225,7 @@ internal sealed class TaskNode
         }
         catch (Exception ex)
         {
-            lock (_lock)
-            {
-                Error = Error is null ? ex : new AggregateException(Error, ex);
-            }
-
-            _scheduler.ReportError(ex);
+            Fail(ex);
         }
         finally
         {
@@ -227,6 +236,16 @@ internal sealed class TaskNode
         {
             Complete();
         }
+    }
+
+    private void Fail(Exception ex)
+    {
+        lock (_lock)
+        {
+            Error = Error is null ? ex : new AggregateException(Error, ex);
+        }
+
+        _scheduler.ReportError(ex);
     }
 
     private void Complete()

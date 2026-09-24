@@ -25,11 +25,14 @@ public sealed class World : IDisposable
     private readonly Dictionary<ArchetypeKey, Archetype> _archetypesByKey = new(ArchetypeKey.Comparer.Instance);
     private readonly Stack<int> _freeIndices = new();
     private readonly Dictionary<QueryDescription, EntityQuery> _queries = new();
-    private readonly List<IStructuralHook> _structuralHooks = new();
     private bool _disposed;
     private EntityLocation[] _locations = new EntityLocation[256];
     private int _nextIndex;
     private Archetype _rootArchetype;
+
+    /// <summary>Replaced rather than modified, so a destroy walks a snapshot without copying it.</summary>
+    private IStructuralHook[] _structuralHooks = [];
+
     private int[] _versions = new int[256];
 
     public World()
@@ -66,12 +69,22 @@ public sealed class World : IDisposable
 
             archetype.Chunks.Clear();
         }
+
+        // The locations point into the chunks just freed; with them gone nothing reads as alive.
+        Array.Clear(_locations);
+        EntityCount = 0;
     }
 
     /// <summary>
     ///     Empties the world: every entity is gone, every chunk is freed, and the archetypes built so
     ///     far are dropped. Cached queries are kept but reset, because systems hold references to them
     ///     across the reload this exists for.
+    ///     <para>
+    ///         Handles are retired, not recycled from scratch: every index keeps counting its versions,
+    ///         so a handle taken before the clear stays dead instead of silently coming back as some
+    ///         unrelated entity. The one way back is <see cref="CreateEntityAt" />, which a reload uses to
+    ///         rebuild each entity under the very handle it had.
+    ///     </para>
     ///     <para>
     ///         Archetypes are keyed on <see cref="ComponentTypeId" />s, so this has to run before any
     ///         component type is unregistered — see
@@ -97,9 +110,17 @@ public sealed class World : IDisposable
         _archetypes.Clear();
         _archetypesByKey.Clear();
         _freeIndices.Clear();
+        for (var index = _nextIndex - 1; index >= 0; index--)
+        {
+            if (_locations[index].Chunk is not null)
+            {
+                RetireVersion(index);
+            }
+
+            _freeIndices.Push(index);
+        }
+
         Array.Clear(_locations);
-        Array.Clear(_versions);
-        _nextIndex = 0;
         EntityCount = 0;
         StructuralVersion++;
 
@@ -128,19 +149,84 @@ public sealed class World : IDisposable
     {
         ThrowIfDisposed();
         JobSafety.AssertWrite(ResourceId.Structure);
-        if (!_freeIndices.TryPop(out var index))
+        int index;
+        do
         {
-            index = _nextIndex++;
-            if (index == _versions.Length)
+            if (!_freeIndices.TryPop(out index))
             {
-                Array.Resize(ref _versions, index * 2);
-                Array.Resize(ref _locations, index * 2);
+                index = AppendIndex();
+                break;
             }
 
-            _versions[index] = 1;
+            // CreateEntityAt takes indices without taking them off the stack, so an entry may be
+            // stale; the index it names is then in use and the entry is simply dropped.
+        } while (_locations[index].Chunk is not null);
+
+        return Place(new Entity(index, _versions[index]), archetype);
+    }
+
+    /// <summary>
+    ///     Creates an entity under exactly <paramref name="handle" />, so that handles taken before a
+    ///     <see cref="Clear" /> refer to it again. This is how a script reload gives every entity back
+    ///     its identity: the editor's selection, a system's cached target, an entity stored in a
+    ///     component all keep working. The index must not be in use.
+    /// </summary>
+    public Entity CreateEntityAt(Entity handle, params ReadOnlySpan<ComponentTypeId> types)
+    {
+        ThrowIfDisposed();
+        JobSafety.AssertWrite(ResourceId.Structure);
+        if (handle.Index < 0 || handle.Version <= 0)
+        {
+            throw new ArgumentException($"{handle} is not a handle an entity can be created under.", nameof(handle));
         }
 
-        var entity = new Entity(index, _versions[index]);
+        while (_nextIndex <= handle.Index)
+        {
+            var skipped = AppendIndex();
+            if (skipped != handle.Index)
+            {
+                _freeIndices.Push(skipped);
+            }
+        }
+
+        if (_locations[handle.Index].Chunk is not null)
+        {
+            throw new InvalidOperationException(
+                $"Index {handle.Index} is already in use by {new Entity(handle.Index, _versions[handle.Index])}.");
+        }
+
+        _versions[handle.Index] = handle.Version;
+        return Place(handle, GetOrCreateArchetypeUnsorted(types));
+    }
+
+    /// <summary>Whether some live entity, of whatever version, occupies <paramref name="index" />.</summary>
+    internal bool IsIndexInUse(int index)
+    {
+        return (uint)index < (uint)_nextIndex && _locations[index].Chunk is not null;
+    }
+
+    private int AppendIndex()
+    {
+        var index = _nextIndex++;
+        if (index == _versions.Length)
+        {
+            Array.Resize(ref _versions, index * 2);
+            Array.Resize(ref _locations, index * 2);
+        }
+
+        _versions[index] = 1;
+        return index;
+    }
+
+    private void RetireVersion(int index)
+    {
+        var version = _versions[index] + 1;
+        _versions[index] = version <= 0 ? 1 : version;
+    }
+
+    private Entity Place(Entity entity, Archetype archetype)
+    {
+        var index = entity.Index;
         var (chunk, slot) = AllocateSlot(archetype);
         chunk.SetEntity(slot, entity);
         chunk.ClearData(slot);
@@ -153,7 +239,7 @@ public sealed class World : IDisposable
     public void DestroyEntity(Entity entity)
     {
         JobSafety.AssertWrite(ResourceId.Structure);
-        if (_structuralHooks.Count > 0)
+        if (_structuralHooks.Length > 0)
         {
             ThrowIfDisposed();
             if (!IsAlive(entity))
@@ -163,10 +249,11 @@ public sealed class World : IDisposable
 
             // Hooks may destroy further entities, which can move this one within its chunk, so the
             // location is only looked up afterwards.
-            // Indexed so that a hook registering another hook does not invalidate the walk.
-            for (var i = 0; i < _structuralHooks.Count; i++)
+            // A snapshot, so that a hook adding or removing hooks neither invalidates the walk nor
+            // makes it skip the hook after the removed one.
+            foreach (var hook in _structuralHooks)
             {
-                _structuralHooks[i].OnBeforeDestroy(this, entity);
+                hook.OnBeforeDestroy(this, entity);
             }
 
             if (!IsAlive(entity))
@@ -178,8 +265,7 @@ public sealed class World : IDisposable
         ref var location = ref GetLocation(entity);
         RemoveFromChunk(location.Chunk!, location.Index);
         location = default;
-        var version = _versions[entity.Index] + 1;
-        _versions[entity.Index] = version == 0 ? 1 : version;
+        RetireVersion(entity.Index);
         _freeIndices.Push(entity.Index);
         EntityCount--;
         StructuralVersion++;
@@ -207,15 +293,21 @@ public sealed class World : IDisposable
     {
         ArgumentNullException.ThrowIfNull(hook);
         ThrowIfDisposed();
-        if (!_structuralHooks.Contains(hook))
+        if (Array.IndexOf(_structuralHooks, hook) < 0)
         {
-            _structuralHooks.Add(hook);
+            _structuralHooks = [.. _structuralHooks, hook];
         }
     }
 
     public bool RemoveStructuralHook(IStructuralHook hook)
     {
-        return _structuralHooks.Remove(hook);
+        if (Array.IndexOf(_structuralHooks, hook) < 0)
+        {
+            return false;
+        }
+
+        _structuralHooks = Array.FindAll(_structuralHooks, h => h != hook);
+        return true;
     }
 
     // -------------------------------------------------------------- components

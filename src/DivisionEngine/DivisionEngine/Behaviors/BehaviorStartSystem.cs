@@ -16,7 +16,7 @@ namespace DivisionEngine;
 /// </summary>
 public sealed class BehaviorStartSystem : ISystem
 {
-    private readonly List<(Entity Entity, Behavior Behavior)> _pending = new();
+    private readonly List<(Entity Entity, Behavior Behavior, ComponentTypeId Type)> _pending = new();
 
     public void Execute(ref FrameContext ctx)
     {
@@ -41,7 +41,7 @@ public sealed class BehaviorStartSystem : ISystem
                     {
                         if (instances[i] is Behavior { IsRunning: false } behavior)
                         {
-                            _pending.Add((entities[i], behavior));
+                            _pending.Add((entities[i], behavior, type));
                         }
                     }
                 }
@@ -51,9 +51,9 @@ public sealed class BehaviorStartSystem : ISystem
         // Turn ids are assigned in start order and decide who commits first, so the order has to come
         // from the world's contents rather than from how its chunks happen to be laid out.
         _pending.Sort(static (a, b) => a.Entity.Index.CompareTo(b.Entity.Index));
-        foreach (var (entity, behavior) in _pending)
+        foreach (var (entity, behavior, type) in _pending)
         {
-            ctx.Graph.Start(entity, behavior);
+            ctx.Graph.Start(entity, behavior, type);
         }
 
         _pending.Clear();

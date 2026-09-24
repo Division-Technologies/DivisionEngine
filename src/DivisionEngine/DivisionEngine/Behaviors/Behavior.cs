@@ -62,14 +62,19 @@ public sealed class BehaviorContext
     private int _externalSequence;
     private int _writeSequence;
 
-    internal BehaviorContext(JobGraph graph, Entity entity, Behavior behavior, int turnId, string name)
+    internal BehaviorContext(JobGraph graph, Entity entity, Behavior behavior, int turnId,
+        ComponentTypeId? attachedAs, string name)
     {
         Graph = graph;
         Entity = entity;
         Behavior = behavior;
         TurnId = turnId;
+        AttachedAs = attachedAs;
         Name = name;
     }
+
+    /// <summary>The component type the behavior was started from, if it was started as a component.</summary>
+    internal ComponentTypeId? AttachedAs { get; }
 
     public JobGraph Graph { get; }
     public World World => Graph.World;
@@ -186,9 +191,13 @@ public sealed class BehaviorContext
         OwnWrites.Add(write);
     }
 
-    /// <summary>Parks until the phase is next resumed by the loop.</summary>
+    /// <summary>
+    ///     Parks until the phase is next resumed by the loop. Throws for a phase the loop never
+    ///     resumes behaviors in (see <see cref="JobGraph.DeclarePhase" />).
+    /// </summary>
     public PhaseAwaitable Phase(PhaseId phase)
     {
+        Graph.ThrowIfCannotPark(phase);
         return new PhaseAwaitable(this, phase);
     }
 
@@ -214,7 +223,30 @@ public sealed class BehaviorContext
 
     internal void RunFirstSegment()
     {
-        Task = Behavior.InvokeRun(this);
+        try
+        {
+            Task = Behavior.InvokeRun(this);
+        }
+        catch (Exception ex)
+        {
+            // Only a Run that is not async throws out of the call itself; an async one reports
+            // through its builder. Either way the turn is over, and being cancelled is what lets
+            // the start system see that it is not running.
+            _cancelled = true;
+            Graph.Scheduler.ReportError(new BehaviorFailedException(Name, ex));
+        }
+    }
+
+    /// <summary>
+    ///     Whether the entity still holds this behavior under the type it was started from. Reads the
+    ///     structure, so only call it with the world quiescent (see <see cref="JobGraph.BeginPhase" />).
+    /// </summary>
+    internal bool IsDetached()
+    {
+        return AttachedAs is { } type
+               && World.IsAlive(Entity)
+               && (!World.HasComponent(Entity, type)
+                   || !ReferenceEquals(World.GetManagedComponent(Entity, type), Behavior));
     }
 
     internal void RunSegment(TaskNode node, Action continuation, EntityAccess? handle)

@@ -54,4 +54,42 @@ internal static class AnalyzerHarness
             .OrderBy(d => d.Location.SourceSpan.Start)
             .ToArray();
     }
+
+    /// <summary>
+    ///     Runs one generator over <paramref name="source" />. Returns the ids it reported (plus the
+    ///     driver's own, such as CS8785 when the generator throws) and everything it generated. When it
+    ///     reports nothing, whatever it emitted is required to compile.
+    /// </summary>
+    public static (string[] Ids, string Generated) Generate(IIncrementalGenerator generator, string source)
+    {
+        var tree = CSharpSyntaxTree.ParseText(source, new CSharpParseOptions(LanguageVersion.Preview));
+        var compilation = CSharpCompilation.Create(
+            "GeneratorTestAssembly", [tree], References,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        // The driver parses what it generates, so it needs the same language version as the input.
+        var driver = CSharpGeneratorDriver
+            .Create([generator.AsSourceGenerator()], parseOptions: (CSharpParseOptions)tree.Options)
+            .RunGeneratorsAndUpdateCompilation(compilation, out var output, out var diagnostics);
+
+        var result = driver.GetRunResult();
+        var generated = string.Join("\n", result.GeneratedTrees.Select(t => t.ToString()));
+        var ids = diagnostics
+            .Concat(result.Diagnostics)
+            .Select(d => d.Id)
+            .Distinct()
+            .ToArray();
+
+        // Anything the generator emits must itself compile.
+        if (ids.Length == 0)
+        {
+            var errors = output.GetDiagnostics()
+                .Where(d => d.Severity == DiagnosticSeverity.Error)
+                .ToImmutableArray();
+            Assert.That(errors, Is.Empty, "generated code must compile:\n" + string.Join("\n", errors.AsEnumerable())
+                                                                           + "\n" + generated);
+        }
+
+        return (ids, generated);
+    }
 }

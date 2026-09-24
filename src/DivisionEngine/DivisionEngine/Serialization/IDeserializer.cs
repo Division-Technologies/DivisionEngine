@@ -15,4 +15,12 @@ public interface IDeserializer
     void EndArray();
     bool TryBeginStruct(int id, ReadOnlySpan<byte> hintUtf8);
     void EndStruct();
+
+    /// <summary>
+    ///     Reads the node of field <paramref name="id" /> without interpreting it, in the format's own
+    ///     encoding (YAML, the only format there is), or null if the field is absent. For data that
+    ///     may not be readable — its type is gone, or has changed — so it can be tried separately and
+    ///     kept as it was if that fails.
+    /// </summary>
+    byte[]? RawNode(int id, ReadOnlySpan<byte> hintUtf8);
 }

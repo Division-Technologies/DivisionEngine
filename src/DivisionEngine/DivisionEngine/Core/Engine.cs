@@ -34,8 +34,13 @@ public sealed class Engine : IDisposable
         RenderWorld = new RenderWorld();
         Loop = loop ?? new FrameLoop();
         Loop.Extract.Add(new ExtractFrameSystem());
+        foreach (var phase in Loop.Phases)
+        {
+            Graph.DeclarePhase(phase.Phase, phase.DispatchesBehaviors);
+        }
     }
 
+    public ILogger Logger => _logger;
     public World World { get; }
     public JobScheduler Scheduler { get; }
     public JobGraph Graph { get; }
@@ -81,10 +86,19 @@ public sealed class Engine : IDisposable
         Recording = null;
     }
 
-    /// <summary>Replays a recorded run: <see cref="RunFrame()" /> takes clock and external completions from the log.</summary>
+    /// <summary>
+    ///     Replays a recorded run: <see cref="RunFrame()" /> takes clock and external completions from
+    ///     the log. The clocks are not rewound, so a replay has to start on an engine that has not run
+    ///     a frame yet, just as the recording did.
+    /// </summary>
     public void Replay(FrameLog log)
     {
         ArgumentNullException.ThrowIfNull(log);
+        if (FrameIndex != 0)
+        {
+            throw new InvalidOperationException("A replay has to start on an engine that has not run a frame.");
+        }
+
         _replay = log;
         _replayIndex = 0;
     }
@@ -109,11 +123,11 @@ public sealed class Engine : IDisposable
                 throw new InvalidOperationException("The replay log has no more frames.");
             }
 
-            RunFrame(log.Frames[_replayIndex].Realtime);
+            RunFrameCore(log.Frames[_replayIndex].Realtime);
             return;
         }
 
-        RunFrame(Realtime.Current);
+        RunFrameCore(Realtime.Current);
     }
 
     /// <summary>
@@ -121,6 +135,16 @@ public sealed class Engine : IDisposable
     ///     continuations, admits external completions, executes the loop's phases, closes the frame.
     /// </summary>
     public void RunFrame(Realtime realtime)
+    {
+        if (_replay is not null)
+        {
+            throw new InvalidOperationException("While replaying, the clock comes from the log; call RunFrame().");
+        }
+
+        RunFrameCore(realtime);
+    }
+
+    private void RunFrameCore(Realtime realtime)
     {
         _synchronizationContext.Update();
 
@@ -142,10 +166,9 @@ public sealed class Engine : IDisposable
 
         Recording?.Add(new FrameRecord(realtime, ImmutableCollectionsMarshal.AsImmutableArray(externals)));
 
-        if (!_frameClock.DoUpdate(realtime, out _time))
-        {
-            _time = new Time(_time.Current, 0); // same clock sample as the previous frame
-        }
+        _time = _frameClock.DoUpdate(realtime, out var time)
+            ? time
+            : new Time(_time.Current, 0); // same clock sample as the previous frame
 
         Graph.Time = _time;
         Graph.Realtime = realtime;

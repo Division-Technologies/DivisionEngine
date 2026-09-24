@@ -151,13 +151,18 @@ public sealed class EntitySceneTests
     }
 
     [Test]
-    public void ManagedComponents_AreRejectedWithAClearError()
+    public void UnserializableManagedComponents_AreLeftOut_WithAClearWarning()
     {
         var entity = _world.CreateEntity();
         _world.AddManagedComponent(entity, new SceneLabel { Value = "x" });
 
-        Assert.That(() => EntityScene.CaptureFrom(_world),
-            Throws.TypeOf<EntitySceneException>().With.Message.Contains("managed"));
+        var scene = EntityScene.CaptureFrom(_world);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scene.EntityCount, Is.EqualTo(1), "the entity itself is still captured");
+            Assert.That(scene.Warnings, Has.One.Contains("ISerializable"));
+        });
     }
 
     [Test]

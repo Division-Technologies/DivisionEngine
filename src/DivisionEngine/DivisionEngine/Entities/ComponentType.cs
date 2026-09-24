@@ -350,18 +350,19 @@ public static class ComponentTypeRegistry
 
             var id = new ComponentTypeId(index);
             var info = new ComponentTypeInfo(id, type, size, alignment, isManaged, isTag);
+
+            // Two component types sharing a persisted id would silently load each other's data.
+            // Checked before anything is published, so a refused type leaves no half-registered slot.
+            if (BySerializedTypeId.TryGetValue(info.SerializedTypeId, out var clash))
+            {
+                throw new InvalidOperationException(
+                    $"{type} and {GetInfo(clash).Type} share the serialized type id {info.SerializedTypeId}. Pin one of them with [TypeId].");
+            }
+
+            BySerializedTypeId.Add(info.SerializedTypeId, id);
             infos[index] = info;
             Volatile.Write(ref _infos, infos);
             Volatile.Write(ref _count, index + 1);
-
-            // Two component types sharing a persisted id would silently load each other's data.
-            if (!BySerializedTypeId.TryAdd(info.SerializedTypeId, id))
-            {
-                var existing = GetInfo(BySerializedTypeId[info.SerializedTypeId]).Type;
-                throw new InvalidOperationException(
-                    $"{type} and {existing} share the serialized type id {info.SerializedTypeId}. Pin one of them with [TypeId].");
-            }
-
             return id;
         }
     }

@@ -106,6 +106,43 @@ public sealed class EntityCommandBufferTests
     }
 
     [Test]
+    public void DestroyingAnEntityThatIsAlreadyGone_IsANoOp()
+    {
+        using var world = new World();
+        var victim = world.CreateEntity();
+        var first = new EntityCommandBuffer();
+        var second = new EntityCommandBuffer();
+        first.DestroyEntity(victim);
+        second.DestroyEntity(victim);
+        second.CreateEntity();
+
+        first.Playback(world);
+        Assert.That(() => second.Playback(world), Throws.Nothing);
+        Assert.That(world.EntityCount, Is.EqualTo(1), "the rest of the second buffer still applied");
+    }
+
+    [Test]
+    public void AFailingCommand_IsSkipped_TheRestApply_AndTheBufferIsCleared()
+    {
+        using var world = new World();
+        var gone = world.CreateEntity();
+        world.DestroyEntity(gone);
+        var ecb = new EntityCommandBuffer();
+        ecb.AddComponent(gone, new Position(1, 0, 0));
+        var created = ecb.CreateEntity();
+        ecb.AddComponent(created, new Position(2, 0, 0));
+
+        var error = Assert.Throws<EntityCommandBufferPlaybackException>(() => ecb.Playback(world));
+        Assert.Multiple(() =>
+        {
+            Assert.That(error!.Errors, Has.Count.EqualTo(1));
+            Assert.That(error.Errors[0], Is.TypeOf<EntityNotAliveException>());
+            Assert.That(world.EntityCount, Is.EqualTo(1), "commands after the failing one were applied");
+            Assert.That(ecb.IsEmpty, Is.True, "a second playback must not replay the buffer");
+        });
+    }
+
+    [Test]
     public void Clear_DiscardsCommands()
     {
         using var world = new World();

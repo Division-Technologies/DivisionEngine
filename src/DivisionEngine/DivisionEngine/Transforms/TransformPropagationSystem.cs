@@ -8,8 +8,8 @@ namespace DivisionEngine;
 ///     hierarchy, during <see cref="PhaseId.TransformPropagation" />.
 ///     An entity in the hierarchy that has no <see cref="LocalTransform" /> contributes no transform
 ///     of its own: it is passed through, and its children are placed relative to the nearest ancestor
-///     that does have one. That keeps the parent/child links usable for grouping entities that are
-///     not in the transform hierarchy at all.
+///     that does have one, or to the world if none does. That keeps the parent/child links usable for
+///     grouping entities without giving the group a transform.
 /// </summary>
 /// <remarks>
 ///     <para>
@@ -72,6 +72,8 @@ public sealed class TransformPropagationSystem : IJobSystem
     /// <summary>Cached so that issuing costs no closure allocation per frame.</summary>
     private ChunkJob? _rootsJob;
 
+    private World? _world;
+
     public void Schedule(in JobSchedulingContext context)
     {
         Schedule(context.Graph, context.World);
@@ -84,18 +86,26 @@ public sealed class TransformPropagationSystem : IJobSystem
         ArgumentNullException.ThrowIfNull(graph);
         ArgumentNullException.ThrowIfNull(world);
 
+        if (_world != world)
+        {
+            // The queries belong to the world they were built from.
+            _world = world;
+            _roots = null;
+            _branchingRoots = null;
+        }
+
         // Without<Static> costs nothing per entity: query matching is per archetype, so static
-        // roots are excluded by never looking at their chunks.
+        // roots are excluded by never looking at their chunks. A root without a LocalTransform is
+        // still a root when it has children: it is passed through like any other entity without
+        // one, so its children are placed relative to the world.
         var roots = _roots ??= world.Query()
-            .With<LocalTransform>()
-            .With<WorldTransform>()
+            .WithAny<LocalTransform>()
+            .WithAny<Child>()
             .Without<Parent>()
             .Without<Static>()
             .Build();
 
         var branching = _branchingRoots ??= world.Query()
-            .With<LocalTransform>()
-            .With<WorldTransform>()
             .With<Child>()
             .Without<Parent>()
             .Without<Static>()
@@ -171,15 +181,21 @@ public sealed class TransformPropagationSystem : IJobSystem
 
     private static void PropagateRoots(World world, ArchetypeChunk chunk, Frontier overflow)
     {
-        var locals = chunk.GetReadOnlySpan<LocalTransform>();
-        var worlds = chunk.GetSpan<WorldTransform>();
+        var hasLocal = chunk.Has<LocalTransform>();
+        var hasWorld = hasLocal && chunk.Has<WorldTransform>();
+        var locals = hasLocal ? chunk.GetReadOnlySpan<LocalTransform>() : default;
+        var worlds = hasWorld ? chunk.GetSpan<WorldTransform>() : default;
         var hasChildren = chunk.Has<Child>();
         var children = hasChildren ? chunk.GetReadOnlySpan<Child>() : default;
 
         for (var i = 0; i < chunk.Count; i++)
         {
-            var matrix = locals[i].ToMatrix();
-            worlds[i].Value = matrix;
+            var matrix = hasLocal ? locals[i].ToMatrix() : Matrix4x4.Identity;
+            if (hasWorld)
+            {
+                worlds[i].Value = matrix;
+            }
+
             if (!hasChildren)
             {
                 continue;

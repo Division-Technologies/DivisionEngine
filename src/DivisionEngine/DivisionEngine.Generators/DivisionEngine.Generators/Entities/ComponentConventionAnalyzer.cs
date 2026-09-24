@@ -24,6 +24,10 @@ public sealed class ComponentConventionAnalyzer : DiagnosticAnalyzer
     public const string ManagedNotSerializableId = "DIVENT003";
     public const string GenericComponentId = "DIVENT004";
 
+    // DIVENT005-009 are the entity job generator's.
+    public const string UnreachableEntityFieldId = "DIVENT010";
+    public const string ReadOnlyEntityFieldId = "DIVENT011";
+
     private const string Category = "DivisionEngine.Entities";
 
     private const string ComponentAttributeFullName = "DivisionEngine.ComponentAttribute";
@@ -67,8 +71,28 @@ public sealed class ComponentConventionAnalyzer : DiagnosticAnalyzer
         DiagnosticSeverity.Error,
         true);
 
+    private static readonly DiagnosticDescriptor UnreachableEntityField = new(
+        UnreachableEntityFieldId,
+        "Entity field cannot be remapped",
+        "'{0}' of component '{1}' holds an Entity that generated code cannot write, because {2}; "
+        + "it is not remapped when the component passes through a command buffer or a scene, "
+        + "so a placeholder or saved entity stored in it will not resolve",
+        Category,
+        DiagnosticSeverity.Warning,
+        true);
+
+    private static readonly DiagnosticDescriptor ReadOnlyEntityField = new(
+        ReadOnlyEntityFieldId,
+        "Read-only entity field cannot be remapped",
+        "'{0}' of component '{1}' holds an Entity but is read-only; it is not remapped when the component "
+        + "passes through a command buffer or a scene, so a placeholder or saved entity stored in it will not resolve",
+        Category,
+        DiagnosticSeverity.Warning,
+        true);
+
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>
-        ImmutableArray.Create(UnserializableValue, NotAssemblyVisible, ManagedNotSerializable, GenericComponent);
+        ImmutableArray.Create(UnserializableValue, NotAssemblyVisible, ManagedNotSerializable, GenericComponent,
+            UnreachableEntityField, ReadOnlyEntityField);
 
     public override void Initialize(AnalysisContext context)
     {
@@ -117,6 +141,12 @@ public sealed class ComponentConventionAnalyzer : DiagnosticAnalyzer
             {
                 symbolContext.ReportDiagnostic(Diagnostic.Create(NotAssemblyVisible, Location(symbol), symbol.Name));
             }
+            else if (symbol.TypeKind == TypeKind.Struct && symbol.IsUnmanagedType)
+            {
+                // Only a registered type gets entity remapping at all; one that is not visible has
+                // already been warned about above.
+                ReportSkippedEntityFields(symbolContext, symbol);
+            }
 
             if (symbol.TypeKind == TypeKind.Class)
             {
@@ -153,6 +183,20 @@ public sealed class ComponentConventionAnalyzer : DiagnosticAnalyzer
                 endContext.ReportDiagnostic(Diagnostic.Create(UnserializableValue, Location(symbol), symbol.Name));
             }
         });
+    }
+
+    /// <summary>The entities ComponentRegistrationGenerator has to leave out of the type's remapper.</summary>
+    private static void ReportSkippedEntityFields(SymbolAnalysisContext context, INamedTypeSymbol symbol)
+    {
+        var skipped = new List<SkippedEntityField>();
+        EntityFields.Collect(symbol, "value", new List<string>(), skipped);
+        foreach (var field in skipped)
+        {
+            var location = field.Location ?? Location(symbol);
+            context.ReportDiagnostic(field.Problem == EntityFieldProblem.ReadOnly
+                ? Diagnostic.Create(ReadOnlyEntityField, location, field.Path, symbol.Name)
+                : Diagnostic.Create(UnreachableEntityField, location, field.Path, symbol.Name, field.Reason));
+        }
     }
 
     /// <summary>Formatter targets a referenced assembly advertises through [FormatterRegistration].</summary>

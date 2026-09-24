@@ -228,6 +228,7 @@ public sealed class RoundTests
         });
 
         _graph.BeginPhase(PhaseId.Update);
+        _graph.ResumePhase(PhaseId.Update);
         _graph.WaitAll();
         Assert.That(seen, Is.EqualTo(7));
         _graph.EndPhase();
@@ -276,6 +277,7 @@ public sealed class RoundTests
         Assert.That(started, Is.False);
 
         _graph.BeginPhase(PhaseId.Update);
+        _graph.ResumePhase(PhaseId.Update);
         _graph.WaitAll();
         Assert.That(started, Is.True);
         _graph.EndPhase();
@@ -339,6 +341,7 @@ public sealed class RoundTests
         Assert.That(order, Is.Empty, "nothing runs before a phase begins");
 
         _graph.BeginPhase(PhaseId.Update);
+        _graph.ResumePhase(PhaseId.Update);
         _graph.EndPhase();
         Assert.That(order.OrderBy(id => id), Is.EqualTo(contexts.Select(c => c.TurnId)));
     }

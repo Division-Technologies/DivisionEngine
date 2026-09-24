@@ -4,6 +4,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Text;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace DivisionEngine.Generators.Entities;
@@ -17,10 +18,13 @@ public enum EntityJobParameterKind
     JobContext
 }
 
-public readonly record struct EntityJobParameter(EntityJobParameterKind Kind, string TypeRef);
+/// <param name="Modifier">What the argument is passed with: <c>"ref "</c>, <c>"in "</c> or nothing.</param>
+public readonly record struct EntityJobParameter(EntityJobParameterKind Kind, string TypeRef, string Modifier);
 
 public readonly record struct EntityJobInfo(
     string TypeName,
+    string SafeName,
+    string TypeKeyword,
     string FullTypeRef,
     string Namespace,
     string ContainingOpen,
@@ -53,7 +57,7 @@ public sealed class EntityJobGenerator : IIncrementalGenerator
     private static readonly DiagnosticDescriptor UnsupportedParameter = new(
         "DIVENT006",
         "Entity job parameter is not supported",
-        "Parameter '{0}' of '{1}.Execute' is not supported; use 'ref T' or 'in T' for components, 'Entity' for the entity, or 'in JobContext' for the frame",
+        "Parameter '{0}' of '{1}.Execute' is not supported; use 'ref T' or 'in T' for components, 'Entity' or 'in Entity' for the entity, or 'JobContext' or 'in JobContext' for the frame",
         "DivisionEngine.Entities",
         DiagnosticSeverity.Error,
         true);
@@ -74,12 +78,21 @@ public sealed class EntityJobGenerator : IIncrementalGenerator
         DiagnosticSeverity.Error,
         true);
 
+    private static readonly DiagnosticDescriptor UnsupportedShape = new(
+        "DIVENT009",
+        "Entity job shape is not supported",
+        "'{0}' cannot be an entity job: {1}",
+        "DivisionEngine.Entities",
+        DiagnosticSeverity.Error,
+        true);
+
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var jobs = context.SyntaxProvider
             .ForAttributeWithMetadataName(
                 EntityJobAttributeFullName,
-                static (node, _) => node is StructDeclarationSyntax,
+                static (node, _) => node is StructDeclarationSyntax
+                    or RecordDeclarationSyntax { ClassOrStructKeyword.RawKind: (int)SyntaxKind.StructKeyword },
                 static (ctx, _) => Describe(ctx));
 
         context.RegisterSourceOutput(jobs, static (spc, result) =>
@@ -92,7 +105,7 @@ public sealed class EntityJobGenerator : IIncrementalGenerator
 
             if (result.Info is { } info)
             {
-                spc.AddSource($"{info.TypeName}.EntityJob.g.cs", Emit(info));
+                spc.AddSource($"{info.SafeName}.EntityJob.g.cs", Emit(info));
             }
         });
     }
@@ -101,16 +114,22 @@ public sealed class EntityJobGenerator : IIncrementalGenerator
     {
         var diagnostics = new List<PendingDiagnostic>();
 
-        if (ctx.TargetSymbol is not INamedTypeSymbol symbol || ctx.TargetNode is not StructDeclarationSyntax syntax)
+        if (ctx.TargetSymbol is not INamedTypeSymbol symbol || ctx.TargetNode is not TypeDeclarationSyntax syntax)
         {
             return new DescribeResult(null, Pack(diagnostics));
         }
 
         var name = symbol.Name;
 
-        if (!syntax.Modifiers.Any(m => m.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.PartialKeyword)))
+        if (!syntax.Modifiers.Any(m => m.IsKind(SyntaxKind.PartialKeyword)))
         {
             diagnostics.Add(new PendingDiagnostic(NotPartial, Pack([name])));
+            return new DescribeResult(null, Pack(diagnostics));
+        }
+
+        if (UnsupportedShapeReason(symbol) is { } reason)
+        {
+            diagnostics.Add(new PendingDiagnostic(UnsupportedShape, Pack([name, reason])));
             return new DescribeResult(null, Pack(diagnostics));
         }
 
@@ -124,6 +143,13 @@ public sealed class EntityJobGenerator : IIncrementalGenerator
             return new DescribeResult(null, Pack(diagnostics));
         }
 
+        if (execute.IsGenericMethod)
+        {
+            diagnostics.Add(new PendingDiagnostic(UnsupportedShape,
+                Pack([name, "its Execute method is generic, so the components it works on are not known"])));
+            return new DescribeResult(null, Pack(diagnostics));
+        }
+
         var parameters = new List<EntityJobParameter>();
         var failed = false;
         foreach (var parameter in execute.Parameters)
@@ -131,25 +157,37 @@ public sealed class EntityJobGenerator : IIncrementalGenerator
             var typeRef = parameter.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
             var typeName = parameter.Type.ToDisplayString();
 
-            if (typeName == EntityFullName)
+            // The entity and the frame are handed over read-only, so they can be taken by value or
+            // by readonly reference, but never as something Execute could write back to.
+            if (typeName is EntityFullName or JobContextFullName)
             {
-                parameters.Add(new EntityJobParameter(EntityJobParameterKind.Entity, typeRef));
-                continue;
-            }
+                var kind = typeName == EntityFullName
+                    ? EntityJobParameterKind.Entity
+                    : EntityJobParameterKind.JobContext;
+                switch (parameter.RefKind)
+                {
+                    case RefKind.None:
+                        parameters.Add(new EntityJobParameter(kind, typeRef, ""));
+                        break;
+                    case RefKind.In or RefKind.RefReadOnlyParameter:
+                        parameters.Add(new EntityJobParameter(kind, typeRef, "in "));
+                        break;
+                    default:
+                        diagnostics.Add(new PendingDiagnostic(UnsupportedParameter, Pack([parameter.Name, name])));
+                        failed = true;
+                        break;
+                }
 
-            if (typeName == JobContextFullName)
-            {
-                parameters.Add(new EntityJobParameter(EntityJobParameterKind.JobContext, typeRef));
                 continue;
             }
 
             switch (parameter.RefKind)
             {
                 case RefKind.Ref:
-                    parameters.Add(new EntityJobParameter(EntityJobParameterKind.WriteComponent, typeRef));
+                    parameters.Add(new EntityJobParameter(EntityJobParameterKind.WriteComponent, typeRef, "ref "));
                     break;
                 case RefKind.In or RefKind.RefReadOnlyParameter:
-                    parameters.Add(new EntityJobParameter(EntityJobParameterKind.ReadComponent, typeRef));
+                    parameters.Add(new EntityJobParameter(EntityJobParameterKind.ReadComponent, typeRef, "in "));
                     break;
                 default:
                     diagnostics.Add(new PendingDiagnostic(UnsupportedParameter, Pack([parameter.Name, name])));
@@ -178,6 +216,8 @@ public sealed class EntityJobGenerator : IIncrementalGenerator
         var (open, close) = Containing(symbol);
         var info = new EntityJobInfo(
             name,
+            SafeName(symbol),
+            symbol.IsRecord ? "record struct" : "struct",
             symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
             symbol.ContainingNamespace.IsGlobalNamespace ? "" : symbol.ContainingNamespace.ToDisplayString(),
             open,
@@ -215,13 +255,73 @@ public sealed class EntityJobGenerator : IIncrementalGenerator
         return result;
     }
 
+    /// <summary>
+    ///     Why the generated partial could not compile for this type, or null when it can. Each of these
+    ///     is caught here so the error names the declaration rather than surfacing in generated code.
+    /// </summary>
+    private static string? UnsupportedShapeReason(INamedTypeSymbol symbol)
+    {
+        if (symbol.Arity > 0)
+        {
+            // The query and access set are static fields per closed type, built from component types
+            // the generator would have to name without knowing the type arguments.
+            return "generic job structs are not supported";
+        }
+
+        if (symbol.IsRefLikeType)
+        {
+            return "a ref struct cannot be captured by the scheduled chunk job";
+        }
+
+        for (var t = symbol.ContainingType; t != null; t = t.ContainingType)
+        {
+            if (t.Arity > 0)
+            {
+                return $"it is nested in the generic type '{t.Name}', which is not supported";
+            }
+
+            var isPartial = t.DeclaringSyntaxReferences.All(r =>
+                r.GetSyntax() is TypeDeclarationSyntax declaration
+                && declaration.Modifiers.Any(m => m.IsKind(SyntaxKind.PartialKeyword)));
+            if (!isPartial)
+            {
+                return
+                    $"its containing type '{t.Name}' is not declared partial, so the generated code cannot be placed in it";
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>The full name made file-name safe, so same-named jobs in different scopes do not collide.</summary>
+    private static string SafeName(INamedTypeSymbol symbol)
+    {
+        var builder = new StringBuilder();
+        foreach (var c in symbol.ToDisplayString())
+        {
+            builder.Append(char.IsLetterOrDigit(c) ? c : '_');
+        }
+
+        return builder.ToString();
+    }
+
+    private static string Keyword(INamedTypeSymbol type)
+    {
+        return type.TypeKind switch
+        {
+            TypeKind.Struct => type.IsRecord ? "record struct" : "struct",
+            TypeKind.Interface => "interface",
+            _ => type.IsRecord ? "record" : "class"
+        };
+    }
+
     /// <summary>Reopens the type's containing types so the generated partial lands in the same place.</summary>
     private static (string Open, string Close) Containing(INamedTypeSymbol symbol)
     {
         var parents = new List<string>();
         for (var t = symbol.ContainingType; t != null; t = t.ContainingType)
         {
-            parents.Insert(0, $"partial {(t.TypeKind == TypeKind.Struct ? "struct" : "class")} {t.Name}");
+            parents.Insert(0, $"partial {Keyword(t)} {t.Name}");
         }
 
         if (parents.Count == 0)
@@ -257,22 +357,22 @@ public sealed class EntityJobGenerator : IIncrementalGenerator
                     queryTypes.Add(parameter.TypeRef);
                     accessCalls.Add($".Write<{parameter.TypeRef}>()");
                     spanDeclarations.Add($"var __s{spanIndex} = __chunk.GetSpan<{parameter.TypeRef}>();");
-                    arguments.Add($"ref __s{spanIndex}[__i]");
+                    arguments.Add($"{parameter.Modifier}__s{spanIndex}[__i]");
                     spanIndex++;
                     break;
                 case EntityJobParameterKind.ReadComponent:
                     queryTypes.Add(parameter.TypeRef);
                     accessCalls.Add($".Read<{parameter.TypeRef}>()");
                     spanDeclarations.Add($"var __s{spanIndex} = __chunk.GetReadOnlySpan<{parameter.TypeRef}>();");
-                    arguments.Add($"in __s{spanIndex}[__i]");
+                    arguments.Add($"{parameter.Modifier}__s{spanIndex}[__i]");
                     spanIndex++;
                     break;
                 case EntityJobParameterKind.Entity:
                     needsEntities = true;
-                    arguments.Add("__entities[__i]");
+                    arguments.Add($"{parameter.Modifier}__entities[__i]");
                     break;
                 case EntityJobParameterKind.JobContext:
-                    arguments.Add("in __job");
+                    arguments.Add($"{parameter.Modifier}__job");
                     break;
             }
         }
@@ -288,10 +388,11 @@ public sealed class EntityJobGenerator : IIncrementalGenerator
         var none = string.Join(", ",
             info.None.AsImmutableArray().Select(t => $"global::DivisionEngine.ComponentType<{t}>.Id"));
 
-        // A job that declares no component access still reads the structure it iterates.
+        // A job that declares no component access still reads the structure it iterates. The builder
+        // only adds that read once a component is named, so a tag-only job states it explicitly.
         var access = accessCalls.Count > 0
             ? "global::DivisionEngine.Access" + string.Join("", accessCalls)
-            : "global::DivisionEngine.AccessSet.Exclusive";
+            : "global::DivisionEngine.Access.Read(global::DivisionEngine.ResourceId.Structure)";
 
         var body = new StringBuilder();
         foreach (var declaration in spanDeclarations)
@@ -311,7 +412,7 @@ public sealed class EntityJobGenerator : IIncrementalGenerator
                  // <auto-generated/>
                  #nullable enable
 
-                 {{namespaceOpen}}{{info.ContainingOpen}}partial struct {{info.TypeName}}
+                 {{namespaceOpen}}{{info.ContainingOpen}}partial {{info.TypeKeyword}} {{info.TypeName}}
                  {
                      private static readonly global::DivisionEngine.QueryDescription __query =
                          global::DivisionEngine.QueryDescription.Create(
@@ -321,7 +422,10 @@ public sealed class EntityJobGenerator : IIncrementalGenerator
 
                      private static readonly global::DivisionEngine.AccessSet __access = {{access}};
 
-                     /// <summary>Schedules this job over every matching chunk. Field values are captured as they are now.</summary>
+                     /// <summary>
+                     ///     Schedules this job over every matching chunk. Field values are captured as they are now,
+                     ///     and each chunk runs on its own copy, so writes to fields do not carry between chunks.
+                     /// </summary>
                      public global::DivisionEngine.JobHandle Schedule(
                          in global::DivisionEngine.JobSchedulingContext __context, string? __name = null)
                      {
@@ -330,11 +434,13 @@ public sealed class EntityJobGenerator : IIncrementalGenerator
                          return __context.Graph.ScheduleChunks(__name ?? "{{info.TypeName}}", __q, __access,
                              (in global::DivisionEngine.JobContext __job, global::DivisionEngine.ArchetypeChunk __chunk) =>
                              {
+                                 // Chunks run concurrently; a copy each keeps a mutating Execute from racing.
+                                 var __local = __self;
                  {{body.ToString().TrimEnd()}}
                                  var __count = __chunk.Count;
                                  for (var __i = 0; __i < __count; __i++)
                                  {
-                                     __self.Execute({{string.Join(", ", arguments)}});
+                                     __local.Execute({{string.Join(", ", arguments)}});
                                  }
                              });
                      }

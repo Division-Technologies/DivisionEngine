@@ -5,7 +5,9 @@
 // and they are exactly what a capture cannot explain when every thread stalls at once. The CLR
 // hands those out through its profiling API, which is an in-process COM object the runtime loads
 // from CORECLR_PROFILER_PATH before any managed code runs, and whose callbacks arrive synchronously
-// on the thread that raised the event - so a zone can simply be opened and closed around them.
+// on the thread that raised the event - so a zone can mostly just be opened and closed around them.
+// Garbage collections are the exception: their start and finish come from different threads (see
+// GcLane).
 //
 // Nothing here is reachable from managed code and nothing links against the engine. The two sides
 // meet only in the Tracy client: this library emits into the same shared DivisionTracy that
@@ -15,11 +17,13 @@
 //
 // See Notes/Core/Profiling.md for how to run with it.
 
+#include <common/TracyQueue.hpp>
 #include <tracy/TracyC.h>
 
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -158,6 +162,7 @@ unsigned ParseCategories(const std::optional<std::string>& value) {
 // stop-the-world is the one thing on the timeline that no engine-side change can schedule around.
 constexpr std::uint32_t COLOR_SUSPEND = 0xB03A3A;
 constexpr std::uint32_t COLOR_STOPPED = 0x7C1F1F;
+constexpr std::uint32_t COLOR_WAIT = 0xC8553D;
 constexpr std::uint32_t COLOR_GC = 0x8F4FBF;
 constexpr std::uint32_t COLOR_JIT = 0x3F8F6F;
 constexpr std::uint32_t COLOR_LOADER = 0x8F7F3F;
@@ -186,11 +191,33 @@ constexpr std::array<___tracy_source_location_data, kSuspendReasonCount> SUSPEND
     Zone("EE suspend: profiler", COLOR_SUSPEND),
 }};
 
+/// The same split for the time an individual thread spends parked by a suspension. See
+/// RuntimeThreadSuspended for where these come from.
+constexpr std::array<___tracy_source_location_data, kSuspendReasonCount> WAIT_LOCATIONS = {{
+    Zone("EE wait: other", COLOR_WAIT),
+    Zone("EE wait: GC", COLOR_WAIT),
+    Zone("EE wait: appdomain shutdown", COLOR_WAIT),
+    Zone("EE wait: code pitching", COLOR_WAIT),
+    Zone("EE wait: shutdown", COLOR_WAIT),
+    Zone("EE wait: unused", COLOR_WAIT),
+    Zone("EE wait: in-proc debugger", COLOR_WAIT),
+    Zone("EE wait: GC prep", COLOR_WAIT),
+    Zone("EE wait: rejit", COLOR_WAIT),
+    Zone("EE wait: profiler", COLOR_WAIT),
+}};
+
 constexpr ___tracy_source_location_data STOPPED_LOCATION = Zone("EE stopped", COLOR_STOPPED);
 constexpr std::array<___tracy_source_location_data, 3> GC_LOCATIONS = {{
     Zone("GC gen0", COLOR_GC),
     Zone("GC gen1", COLOR_GC),
     Zone("GC gen2", COLOR_GC),
+}};
+/// Induced collections get their own rows rather than a text annotation: the GC lane is a GPU
+/// timeline in Tracy's terms, and GPU zones carry no text.
+constexpr std::array<___tracy_source_location_data, 3> GC_INDUCED_LOCATIONS = {{
+    Zone("GC gen0 (induced)", COLOR_GC),
+    Zone("GC gen1 (induced)", COLOR_GC),
+    Zone("GC gen2 (induced)", COLOR_GC),
 }};
 constexpr ___tracy_source_location_data GC_UNKNOWN_LOCATION = Zone("GC", COLOR_GC);
 constexpr ___tracy_source_location_data JIT_LOCATION = Zone("JIT", COLOR_JIT);
@@ -198,16 +225,20 @@ constexpr ___tracy_source_location_data MODULE_LOCATION = Zone("Module load", CO
 
 /// The zones this profiler holds open across two callbacks, as one stack per thread.
 ///
-/// Tracy models a thread's zones as a stack: they must close in the order they opened. Runtime
-/// events do not always oblige. A background collection starts inside a suspension and outlives it,
-/// so on one thread "GC gen2" and "EE stopped" genuinely cross. Where that happens the crossing
-/// zone is closed and reopened immediately, which splits it into abutting segments instead of
-/// either losing it or corrupting the capture - and a capture with a single bad pair is rejected
-/// whole ("Invalid order of zone begin and end events"), so this is not a case to leave to luck.
+/// Tracy models a thread's zones as a stack: they must close in the order they opened, and on the
+/// thread that opened them. Everything kept here is therefore only ever opened and closed by
+/// callbacks that the runtime makes on one and the same thread - the collection itself, whose start
+/// and end do not, lives on a timeline of its own (see GcLane).
+///
+/// Runtime events on one thread still do not always nest. Where a zone has to close while others
+/// opened after it are still running, those are closed and reopened immediately, which splits them
+/// into abutting segments instead of either losing them or corrupting the capture - and a capture
+/// with a single bad pair is rejected whole ("Invalid order of zone begin and end events"), so this
+/// is not a case to leave to luck.
 enum ZoneKey : std::uint8_t {
     kKeySuspend,
     kKeyStopped,
-    kKeyGc,
+    kKeyWait,
     kKeyJit,
     kKeyModule,
     kKeyDeep,
@@ -216,13 +247,16 @@ enum ZoneKey : std::uint8_t {
 
 struct OpenZone {
     TracyCZoneCtx context;
+    /// Null for a deep-mode frame that is tracked but draws nothing: see DeepEnter.
     const ___tracy_source_location_data* location;
+    /// The method a deep-mode frame belongs to; unused for every other key.
+    FunctionId function;
     ZoneKey key;
     bool emitted;
 };
 
-/// How deep the stack may get. Ordinarily a handful of zones nest; deep mode nests one per managed
-/// frame, so the limit doubles as the cap on how much of a call tree is recorded.
+/// How many zones may be open on one thread. Ordinarily a handful nest; deep mode nests one per
+/// managed frame, so the limit doubles as the cap on how much of a call tree is recorded.
 constexpr int STACK_LIMIT = 32;
 constexpr int DEEP_STACK_LIMIT_DEFAULT = 64;
 
@@ -243,13 +277,22 @@ int DeepStackLimit() {
     return DEEP_STACK_LIMIT_DEFAULT;
 }
 
-/// Per thread, grown on demand. Not a fixed array: deep mode needs hundreds of entries and every
-/// other mode needs a handful, and paying the deep size in thread-local storage on every thread of
-/// a process that is not deep profiling would be the wrong trade.
+/// Per thread. The first few entries are inline and only deep mode ever grows past them.
+///
+/// Inline because some of the callbacks that push here - a thread parking itself for a suspension -
+/// run while the runtime is stopping the world, where taking the allocator's lock is best avoided;
+/// those never grow the stack (see PushZone). Not all inline, because deep mode needs hundreds of
+/// entries and paying that in thread-local storage on every thread of a process that is not deep
+/// profiling would be the wrong trade.
 struct ZoneStack {
-    /// Every slot up to the capacity; only the first depth of them are open zones.
-    std::vector<OpenZone> items;
+    static constexpr int INLINE_CAPACITY = 16;
+
+    std::array<OpenZone, INLINE_CAPACITY> inline_items = {};
+    /// Every entry once the stack has outgrown the inline ones, which are then no longer used.
+    std::vector<OpenZone> grown;
     int depth = 0;
+    /// Entries that draw a zone. Deep mode's untracked frames count toward depth but not here.
+    int zones = 0;
 
     /// Zones that could not be opened because the stack was full, so that their close still balances.
     std::array<unsigned, kKeyCount> dropped = {};
@@ -259,15 +302,37 @@ struct ZoneStack {
         return dropped[key];
     }
 
-    bool Reserve(int wanted) {
-        const int capacity = static_cast<int>(items.size());
+    [[nodiscard]] int Capacity() const {
+        return grown.empty() ? INLINE_CAPACITY : static_cast<int>(grown.size());
+    }
+
+    OpenZone& At(int index) {
+        const auto slot = static_cast<std::size_t>(index);
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index,cppcoreguidelines-pro-bounds-avoid-unchecked-container-access): index is below depth, and depth never exceeds the capacity of the storage in use.
+        return grown.empty() ? inline_items[slot] : grown[slot];
+    }
+
+    /// Makes room for wanted entries, allocating only if growth is allowed.
+    bool Reserve(int wanted, bool may_grow) {
+        const int capacity = Capacity();
         if (wanted <= capacity) {
             return true;
         }
 
-        const int grown = capacity == 0 ? 16 : capacity * 2;
+        if (!may_grow) {
+            return false;
+        }
+
         try {
-            items.resize(static_cast<std::size_t>(std::max(grown, wanted)));
+            std::vector<OpenZone> larger(static_cast<std::size_t>(std::max(capacity * 2, wanted)));
+            const auto count = static_cast<std::size_t>(depth);
+            if (grown.empty()) {
+                std::copy_n(inline_items.begin(), count, larger.begin());
+            } else {
+                std::copy_n(grown.begin(), count, larger.begin());
+            }
+
+            grown = std::move(larger);
         } catch (const std::bad_alloc&) {
             // Out of memory is a dropped zone, not an exception escaping into the runtime.
             return false;
@@ -312,7 +377,7 @@ void Annotate(OpenZone* zone, std::string_view text) {
 }
 
 void OpenAt(OpenZone& zone) {
-    zone.emitted = TracyReady();
+    zone.emitted = zone.location != nullptr && TracyReady();
     if (zone.emitted) {
         zone.context = ___tracy_emit_zone_begin(zone.location, 1);
     }
@@ -326,28 +391,65 @@ void CloseAt(OpenZone& zone) {
     zone.emitted = false;
 }
 
-void PushZone(ZoneKey key, const ___tracy_source_location_data& location) {
+/// Opens a zone on this thread. may_grow is false on the paths that run while the world is being
+/// stopped: they use the inline entries or drop the zone, but never allocate.
+void PushZone(ZoneKey key, const ___tracy_source_location_data& location, bool may_grow = true) {
     ZoneStack& stack = t_zones;
-    if (stack.depth >= g_stack_limit || !stack.Reserve(stack.depth + 1)) {
+    if (stack.zones >= g_stack_limit || !stack.Reserve(stack.depth + 1, may_grow)) {
         ++stack.Dropped(key);
         return;
     }
 
-    OpenZone& zone = stack.items[stack.depth++];
+    OpenZone& zone = stack.At(stack.depth++);
     zone.location = &location;
+    zone.function = 0;
     zone.key = key;
+    ++stack.zones;
     OpenAt(zone);
 }
 
-OpenZone* TopZone(ZoneKey key) {
+/// The innermost entry with this key, or -1.
+int TopIndex(ZoneKey key) {
     ZoneStack& stack = t_zones;
     for (int index = stack.depth - 1; index >= 0; --index) {
-        if (stack.items[index].key == key) {
-            return &stack.items[index];
+        if (stack.At(index).key == key) {
+            return index;
         }
     }
 
-    return nullptr;
+    return -1;
+}
+
+OpenZone* TopZone(ZoneKey key) {
+    const int index = TopIndex(key);
+    return index < 0 ? nullptr : &t_zones.At(index);
+}
+
+/// Closes the entry at target, and splits whatever was stacked on top of it.
+void PopAt(int target) {
+    ZoneStack& stack = t_zones;
+    for (int index = stack.depth - 1; index > target; --index) {
+        CloseAt(stack.At(index));
+    }
+
+    OpenZone& closed = stack.At(target);
+    CloseAt(closed);
+    if (closed.location != nullptr) {
+        --stack.zones;
+    }
+
+    // Whatever was stacked on top of it is still running, so it starts again here as a new segment.
+    for (int index = target + 1; index < stack.depth; ++index) {
+        OpenZone& moved = stack.At(index - 1);
+        moved = stack.At(index);
+        OpenAt(moved);
+        if (moved.emitted) {
+            Annotate(&moved, CONTINUED);
+            g_splits.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
+    --stack.depth;
 }
 
 void PopZone(ZoneKey key) {
@@ -357,33 +459,10 @@ void PopZone(ZoneKey key) {
         return;
     }
 
-    int target = -1;
-    for (int index = stack.depth - 1; index >= 0; --index) {
-        if (stack.items[index].key == key) {
-            target = index;
-            break;
-        }
+    const int target = TopIndex(key);
+    if (target >= 0) {
+        PopAt(target);
     }
-
-    if (target < 0) {
-        return;
-    }
-
-    for (int index = stack.depth - 1; index > target; --index) {
-        CloseAt(stack.items[index]);
-    }
-
-    CloseAt(stack.items[target]);
-
-    // Whatever was stacked on top of it is still running, so it starts again here as a new segment.
-    for (int index = target + 1; index < stack.depth; ++index) {
-        stack.items[index - 1] = stack.items[index];
-        OpenAt(stack.items[index - 1]);
-        Annotate(&stack.items[index - 1], CONTINUED);
-        g_splits.fetch_add(1, std::memory_order_relaxed);
-    }
-
-    --stack.depth;
 }
 
 // ----- calling the runtime back -----
@@ -391,6 +470,7 @@ void PopZone(ZoneKey key) {
 using QueryInterfaceFn = Hresult(DIVISION_STDCALL*)(void*, const Guid*, void**);
 using ReleaseFn = Ulong(DIVISION_STDCALL*)(void*);
 using SetEventMask2Fn = Hresult(DIVISION_STDCALL*)(void*, Dword, Dword);
+using GetCurrentThreadIdFn = Hresult(DIVISION_STDCALL*)(void*, ThreadId*);
 using GetModuleInfoFn = Hresult(DIVISION_STDCALL*)(void*, ModuleId, const std::uint8_t**, Ulong, Ulong*, Wchar*, AssemblyId*);
 
 /// The profiling API is COM without a COM runtime: an object is a pointer to a vtable pointer, and
@@ -504,9 +584,14 @@ std::string ModuleName(ModuleId module_id) {
 /// several ways to do this and only one of them works:
 ///
 ///  - `SetEnterLeaveFunctionHooks3` registers and the hooks are called, but the process corrupts
-///    its own heap and dies (an AccessViolation somewhere unrelated, at shutdown or before).
+///    its own heap and dies (an AccessViolation somewhere unrelated, at shutdown or before). Our
+///    doing, not the runtime's: ELT3 hooks are the fast path, called straight from JIT'd code with
+///    no wrapper in between, so they must preserve every register themselves (the documentation
+///    asks for naked functions). An ordinary C++ function clobbers the caller's argument registers.
 ///  - `SetEnterLeaveFunctionHooks3WithInfo` is refused outright with 0x80131374.
-///  - `SetEnterLeaveFunctionHooks2` works: 1.5 million hook calls and a clean exit.
+///  - `SetEnterLeaveFunctionHooks2` works: 1.5 million hook calls and a clean exit. These go
+///    through the runtime's own register-saving stub (ProfileEnterNaked), which then makes an
+///    ordinary call, so an ordinary function is what they expect.
 ///
 /// And installing a `FunctionIDMapper` alongside any of them crashes immediately after the mapper's
 /// first call, whatever it returns - even the identity. So the client-id trick, which would have
@@ -557,8 +642,9 @@ bool IsExcluded(const std::string& name) {
 /// FunctionID to call site, written once per method and then read on every call.
 ///
 /// Open addressing with atomic slots rather than a map behind a lock: the write side is the JIT,
-/// which is rare, and the read side is every managed call on every thread, which must not contend.
-/// A method whose name never arrives, and anything past a full table, falls back to "managed".
+/// which is rare, and the read side is every managed call's entry on every thread, which must not
+/// contend. A method that is not in the table (its name has not arrived yet, or the table is full)
+/// draws no zone; one whose metadata could not be read is drawn as "managed".
 class FunctionNames {
   public:
     static constexpr std::size_t CAPACITY = 1u << 16;
@@ -675,18 +761,20 @@ std::string MethodName(FunctionId function_id) {
 
 /// Records what a freshly compiled method is called.
 ///
-/// Every method the hooks ever see passes through here first: enter and leave stubs are emitted by
-/// the JIT, so code that was compiled ahead of time (most of the framework, as ReadyToRun) carries
-/// no hooks at all and never reaches them. Which also means deep mode shows the engine and the user
-/// code rather than the insides of the base class library.
+/// Enter and leave stubs are emitted by the JIT, so code that was compiled ahead of time (most of
+/// the framework, as ReadyToRun) carries no hooks at all and never reaches them. Which also means
+/// deep mode shows the engine and the user code rather than the insides of the base class library.
+///
+/// The name arrives after the code does: other threads can already be running a method before its
+/// compilation is reported finished. So the table only ever answers "what is this frame called",
+/// never "does this frame have a zone" - that is decided once, on entry, and remembered on the
+/// thread's stack (see DeepEnter).
 void RememberName(FunctionId function_id) {
     if (Names().Find(function_id) != nullptr) {
         return;
     }
 
-    // Recorded either way, including when the name cannot be read. Presence in the table is what
-    // "this method carries hooks" means, and the enter, leave and unwind paths all rely on that
-    // being the same answer - a method that is pushed but not popped is as bad as the reverse.
+    // Recorded even when the name cannot be read, so the next lookup is not another metadata walk.
     const std::string name = MethodName(function_id);
     if (name.empty()) {
         Names().Add(function_id, &DEEP_UNKNOWN_LOCATION);
@@ -714,22 +802,56 @@ void RememberName(FunctionId function_id) {
     Names().Add(function_id, location);
 }
 
-/// Whether this function's frames carry a zone. Unknown means it was never compiled while we were
-/// attached - code that was compiled ahead of time has no hooks - and excluded means it is one of
-/// the methods that must not be wrapped.
-bool IsInstrumented(FunctionId function_id, const ___tracy_source_location_data*& location) {
-    location = Names().Find(function_id);
-    return location != nullptr && location != &DEEP_EXCLUDED_LOCATION;
-}
-
+/// Every hooked entry pushes a frame, whether or not it draws a zone.
+///
+/// A frame draws nothing when the method is excluded, when its name has not been recorded yet (it
+/// is still finishing compilation on another thread), or when the stack is past the depth limit.
+/// It is pushed regardless, so that leave, tailcall and unwind never have to ask the name table
+/// again: the table can change between a method's entry and its return, and if the two answers
+/// differed, a return would close the caller's zone. They look at the top frame instead.
 void DIVISION_STDCALL DeepEnter(FunctionId function_id, std::uintptr_t client_data, std::uintptr_t frame_info, void* argument_info) {
     (void)client_data;
     (void)frame_info;
     (void)argument_info;
 
-    const ___tracy_source_location_data* location = nullptr;
-    if (IsInstrumented(function_id, location)) {
-        PushZone(kKeyDeep, *location);
+    ZoneStack& stack = t_zones;
+    if (!stack.Reserve(stack.depth + 1, true)) {
+        ++stack.Dropped(kKeyDeep);
+        return;
+    }
+
+    const ___tracy_source_location_data* location = Names().Find(function_id);
+    if (location == &DEEP_EXCLUDED_LOCATION || stack.zones >= g_stack_limit) {
+        location = nullptr;
+    }
+
+    OpenZone& frame = stack.At(stack.depth++);
+    frame.location = location;
+    frame.function = function_id;
+    frame.key = kKeyDeep;
+    if (location != nullptr) {
+        ++stack.zones;
+    }
+
+    OpenAt(frame);
+}
+
+/// Pops the frame that DeepEnter pushed for this method, if the innermost one is it.
+///
+/// Leave and tailcall always match the innermost frame. An exception unwind does not have to: it
+/// reports every frame it unwinds, including those compiled ahead of time that never went through
+/// DeepEnter, and those must leave the stack alone.
+void DeepPop(FunctionId function_id) {
+    ZoneStack& stack = t_zones;
+    const int top = TopIndex(kKeyDeep);
+    if (top >= 0 && stack.At(top).function == function_id) {
+        PopAt(top);
+        return;
+    }
+
+    // The entry could not be recorded (out of memory), so there is nothing to close for it.
+    if (unsigned& dropped = stack.Dropped(kKeyDeep); dropped > 0) {
+        --dropped;
     }
 }
 
@@ -738,22 +860,130 @@ void DIVISION_STDCALL DeepLeave(FunctionId function_id, std::uintptr_t client_da
     (void)frame_info;
     (void)return_range;
 
-    const ___tracy_source_location_data* location = nullptr;
-    if (IsInstrumented(function_id, location)) {
-        PopZone(kKeyDeep);
-    }
+    DeepPop(function_id);
 }
 
 /// A tail call replaces this frame with the callee's, so no leave will arrive for it. The callee
-/// opens its own zone on entry and closes it on its own leave, which keeps the stack balanced.
+/// opens its own frame on entry and closes it on its own leave, which keeps the stack balanced.
 void DIVISION_STDCALL DeepTailcall(FunctionId function_id, std::uintptr_t client_data, std::uintptr_t frame_info) {
     (void)client_data;
     (void)frame_info;
 
-    const ___tracy_source_location_data* location = nullptr;
-    if (IsInstrumented(function_id, location)) {
-        PopZone(kKeyDeep);
+    DeepPop(function_id);
+}
+
+// ----- the GC lane -----
+
+/// Collections, drawn on a timeline of their own rather than on any thread.
+///
+/// GarbageCollectionStarted and GarbageCollectionFinished are not a pair on one thread. Under
+/// Server GC the start is raised by whichever GC thread reaches the "generation determined" join
+/// last, and the finish by heap 0's GC thread. A background collection starts on the thread that
+/// triggered it and finishes on the background GC thread, in workstation mode as well. A Tracy CPU
+/// zone has to end on the thread that began it, so no per-thread zone can hold a collection - the
+/// first version tried, and under DOTNET_gcServer=1 the zones never closed.
+///
+/// A Tracy GPU context can. One that is not bound to a thread keeps a single zone stack, its zones
+/// may begin and end on any thread, and their times are given explicitly, so this one is fed our
+/// own nanosecond clock and resynchronised against Tracy's at every collection. The events go
+/// through Tracy's serialised queue, which takes a lock: fine for a handful of collections a frame,
+/// and it touches nothing else. TRACY_FIBERS would also have let a zone move between threads, but
+/// it routes every zone of the process through that same lock - the engine's included.
+///
+/// The finish callback does not say which collection finished. Collections nest (ephemeral ones
+/// run inside a background one), and each finish closes the innermost one open. The runtime also
+/// reports more finishes than starts: an ephemeral collection that runs just before a background
+/// one shares the background one's start. So a finish with nothing open is ignored.
+class GcLane {
+  public:
+    void Begin(const ___tracy_source_location_data& location) {
+        const std::lock_guard<std::mutex> guard(mutex);
+        if (depth >= MAX_DEPTH) {
+            ++overflow;
+            return;
+        }
+
+        // Tracy ignores a zone begun while no UI is connected but would still send its end if one
+        // connected in between, and the UI does not survive an end it never saw the begin of. So
+        // whether the begin went out is remembered, and decides the end.
+        const bool emitted = EnsureContext() && ___tracy_connected() != 0;
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index,cppcoreguidelines-pro-bounds-avoid-unchecked-container-access): depth is below MAX_DEPTH, checked above.
+        emitted_begins[static_cast<std::size_t>(depth++)] = emitted;
+        if (!emitted) {
+            return;
+        }
+
+        const std::int64_t now = Now();
+        ___tracy_emit_gpu_time_sync_serial({now, CONTEXT});
+        const std::uint16_t query = next_query++;
+        ___tracy_emit_gpu_zone_begin_serial({reinterpret_cast<std::uint64_t>(&location), query, CONTEXT});
+        ___tracy_emit_gpu_time_serial({now, query, CONTEXT});
     }
+
+    void End() {
+        const std::lock_guard<std::mutex> guard(mutex);
+        if (overflow > 0) {
+            --overflow;
+            return;
+        }
+
+        if (depth == 0) {
+            return;
+        }
+
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index,cppcoreguidelines-pro-bounds-avoid-unchecked-container-access): depth is in 1..MAX_DEPTH here.
+        if (!emitted_begins[static_cast<std::size_t>(--depth)] || !TracyReady()) {
+            return;
+        }
+
+        const std::uint16_t query = next_query++;
+        ___tracy_emit_gpu_zone_end_serial({query, CONTEXT});
+        ___tracy_emit_gpu_time_serial({Now(), query, CONTEXT});
+    }
+
+  private:
+    /// Ours alone. The C API leaves context ids to the caller, and the C++ API hands them out from
+    /// zero, so the top of the range stays clear of any GPU context the engine might add.
+    static constexpr std::uint8_t CONTEXT = 255;
+    static constexpr std::string_view NAME = "GC";
+
+    /// Collections open at once. Two is the most the runtime produces (an ephemeral collection
+    /// inside a background one); the rest is room for a start whose finish never came.
+    static constexpr int MAX_DEPTH = 8;
+
+    static std::int64_t Now() {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+
+    /// Announces the lane once the client is up. Under TRACY_ON_DEMAND both items are kept by the
+    /// client and replayed to every UI that connects, so doing this once is enough.
+    bool EnsureContext() {
+        if (created) {
+            return true;
+        }
+
+        if (!TracyReady()) {
+            return false;
+        }
+
+        // A period of 1: our times are already nanoseconds.
+        ___tracy_emit_gpu_new_context_serial({Now(), 1.0f, CONTEXT, 0, static_cast<std::uint8_t>(tracy::GpuContextType::Custom)});
+        ___tracy_emit_gpu_context_name_serial({CONTEXT, NAME.data(), static_cast<std::uint16_t>(NAME.size())});
+        created = true;
+        return true;
+    }
+
+    std::mutex mutex;
+    bool created = false;
+    int depth = 0;
+    unsigned overflow = 0;
+    std::uint16_t next_query = 0;
+    std::array<bool, MAX_DEPTH> emitted_begins = {};
+};
+
+GcLane& Gc() {
+    static GcLane lane;
+    return lane;
 }
 
 // ----- callbacks -----
@@ -761,6 +991,10 @@ void DIVISION_STDCALL DeepTailcall(FunctionId function_id, std::uintptr_t client
 /// Every slot this profiler does not implement. S_OK rather than E_NOTIMPL: the runtime treats a
 /// failing callback as the profiler's problem, and there is nothing to report - we simply do not
 /// subscribe to that event.
+///
+/// Only for slots whose arguments are all inputs. A callback with an out parameter that returned
+/// S_OK without writing it would hand the runtime an uninitialised value; those have their own
+/// implementations below, even where the runtime happens to pre-initialise the variable today.
 Hresult DIVISION_STDCALL Ignored(void*) {
     return kOk;
 }
@@ -778,7 +1012,8 @@ Hresult DIVISION_STDCALL Initialize(void* self, void* info_unknown) {
 
     Dword low = 0;
     Dword high = 0;
-    if ((g_categories & kCategorySuspend) != 0) {
+    if ((g_categories & (kCategorySuspend | kCategoryGc)) != 0) {
+        // The GC group needs it too: the per-thread wait zones come from the suspension callbacks.
         low |= kMonitorSuspends;
     }
     const bool deep = (g_categories & kCategoryDeep) != 0;
@@ -809,8 +1044,8 @@ Hresult DIVISION_STDCALL Initialize(void* self, void* info_unknown) {
     }
 
     if (deep) {
-        // The mapper has to be in place before the hooks are, or the first calls arrive carrying
-        // raw FunctionIDs where the hooks expect a call site.
+        // No FunctionIDMapper is installed (see the deep mode notes above), so the hooks receive
+        // raw FunctionIDs and look the names up themselves.
         const Hresult hooks = Method<SetEnterLeaveHooks2Fn>(g_info, InfoSlot::SetEnterLeaveFunctionHooks2)(
             g_info, reinterpret_cast<void*>(&DeepEnter), reinterpret_cast<void*>(&DeepLeave), reinterpret_cast<void*>(&DeepTailcall)
         );
@@ -842,10 +1077,29 @@ Hresult DIVISION_STDCALL Shutdown(void* self) {
     return kOk;
 }
 
+/// The reason for the suspension in progress, for the threads that park during it. They are told
+/// only that they are suspended; the reason goes to the suspending thread. It is written before
+/// the runtime starts trapping threads (ThreadSuspend::SuspendEE reports the start, and only then
+/// calls SuspendAllThreads), so a thread that parks has the current one.
+std::atomic<Dword> g_suspend_reason{kSuspendOther};
+
+const ___tracy_source_location_data& ForReason(const std::array<___tracy_source_location_data, kSuspendReasonCount>& locations, Dword reason) {
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index,cppcoreguidelines-pro-bounds-avoid-unchecked-container-access): reasons past the table fall back to kSuspendOther.
+    return locations[reason < kSuspendReasonCount ? reason : kSuspendOther];
+}
+
+// The runtime brackets a suspension from start to resume on one thread: ThreadSuspend::SuspendEE
+// takes the thread store lock and ThreadSuspend::RestartEE releases it, and a lock is released by
+// its owner. So unlike the collection, these can live on the per-thread stack. Under Server GC that
+// thread is heap 0's GC thread rather than a managed one.
+
 Hresult DIVISION_STDCALL RuntimeSuspendStarted(void* self, Dword reason) {
     (void)self;
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index): reasons past the table fall back to kSuspendOther.
-    PushZone(kKeySuspend, SUSPEND_LOCATIONS[reason < kSuspendReasonCount ? reason : kSuspendOther]);
+    g_suspend_reason.store(reason, std::memory_order_release);
+    if ((g_categories & kCategorySuspend) != 0) {
+        PushZone(kKeySuspend, ForReason(SUSPEND_LOCATIONS, reason), false);
+    }
+
     return kOk;
 }
 
@@ -854,26 +1108,90 @@ Hresult DIVISION_STDCALL RuntimeSuspendStarted(void* self, Dword reason) {
 /// genuinely long pause.
 Hresult DIVISION_STDCALL RuntimeSuspendFinished(void* self) {
     (void)self;
-    PushZone(kKeyStopped, STOPPED_LOCATION);
+    if ((g_categories & kCategorySuspend) != 0) {
+        PushZone(kKeyStopped, STOPPED_LOCATION, false);
+    }
+
     return kOk;
 }
 
 Hresult DIVISION_STDCALL RuntimeSuspendAborted(void* self) {
     (void)self;
-    PopZone(kKeyStopped);
-    PopZone(kKeySuspend);
+    if ((g_categories & kCategorySuspend) != 0) {
+        PopZone(kKeyStopped);
+        PopZone(kKeySuspend);
+    }
+
     return kOk;
 }
 
 Hresult DIVISION_STDCALL RuntimeResumeStarted(void* self) {
     (void)self;
-    PopZone(kKeyStopped);
+    if ((g_categories & kCategorySuspend) != 0) {
+        PopZone(kKeyStopped);
+    }
+
     return kOk;
 }
 
 Hresult DIVISION_STDCALL RuntimeResumeFinished(void* self) {
     (void)self;
-    PopZone(kKeySuspend);
+    if ((g_categories & kCategorySuspend) != 0) {
+        PopZone(kKeySuspend);
+    }
+
+    return kOk;
+}
+
+/// Whether a ThreadID names the thread this callback runs on. ThreadIDs are the runtime's Thread
+/// objects, and GetCurrentThreadID is one of the calls that is safe from anywhere: it takes no lock
+/// and allocates nothing, which matters here, where the other threads may be hard-suspended.
+bool IsCurrentThread(ThreadId thread_id) {
+    if (g_info == nullptr) {
+        return false;
+    }
+
+    ThreadId current = 0;
+    return Method<GetCurrentThreadIdFn>(g_info, InfoSlot::GetCurrentThreadID)(g_info, &current) == kOk && current == thread_id;
+}
+
+/// A thread has stopped running managed code because of a suspension - the per-thread half of
+/// "the GC stopped the world", which is the time a thread actually loses.
+///
+/// The runtime sends this from three places (vm/threadsuspend.cpp), and only two of them are about
+/// the thread the callback runs on:
+///
+///  - Thread::RareDisablePreemptiveGC: a thread returning to managed code, or brought to a safe
+///    point, finds a suspension in progress and waits in WaitUntilGCComplete. Suspended and resumed
+///    are both sent from that one call on that thread, around the wait.
+///  - ThreadSuspend::SuspendEE / RestartEE: the thread doing the suspending reports itself, so in
+///    workstation GC the thread that triggered the collection shows the whole of it. The GC's own
+///    threads are filtered out by the runtime before we are called.
+///  - Thread::SuspendThread / ResumeThread (Windows): the suspending thread hard-suspends another
+///    one for a moment to redirect it. The callback names the other thread but runs on the
+///    suspending one, and a zone cannot be drawn on a thread from outside it - ignored.
+///
+/// What this cannot show is a thread that sits out the suspension in preemptive mode (blocked in
+/// native code, or under Server GC the allocating thread that triggered the collection, which waits
+/// in wait_for_gc_done). No callback is made for it, since it never needed stopping.
+Hresult DIVISION_STDCALL RuntimeThreadSuspended(void* self, ThreadId thread_id) {
+    (void)self;
+    if ((g_categories & kCategoryGc) != 0 && IsCurrentThread(thread_id)) {
+        PushZone(kKeyWait, ForReason(WAIT_LOCATIONS, g_suspend_reason.load(std::memory_order_acquire)), false);
+    }
+
+    return kOk;
+}
+
+/// Not always preceded by a suspended: RareDisablePreemptiveGC skips that one for a thread the
+/// debugger is also suspending, and sends this one regardless. PopZone does nothing when there is
+/// no zone to close.
+Hresult DIVISION_STDCALL RuntimeThreadResumed(void* self, ThreadId thread_id) {
+    (void)self;
+    if ((g_categories & kCategoryGc) != 0 && IsCurrentThread(thread_id)) {
+        PopZone(kKeyWait);
+    }
+
     return kOk;
 }
 
@@ -883,25 +1201,22 @@ Hresult DIVISION_STDCALL GarbageCollectionStarted(void* self, int generation_cou
     // The array is indexed by COR_PRF_GC_GENERATION, where 3 and 4 are the large and pinned object
     // heaps. The generation a capture is read by is the highest ephemeral one.
     const std::span<const Bool32> collected(generation_collected, static_cast<std::size_t>(std::max(generation_count, 0)));
+    const auto& locations = reason == kGcInduced ? GC_INDUCED_LOCATIONS : GC_LOCATIONS;
     const ___tracy_source_location_data* location = &GC_UNKNOWN_LOCATION;
-    for (std::size_t index = 0; index < collected.size() && index < GC_LOCATIONS.size(); ++index) {
+    for (std::size_t index = 0; index < collected.size() && index < locations.size(); ++index) {
         if (collected[index] != 0) {
             // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index): the loop is bounded by its size.
-            location = &GC_LOCATIONS[index];
+            location = &locations[index];
         }
     }
 
-    PushZone(kKeyGc, *location);
-    if (reason == kGcInduced) {
-        Annotate(TopZone(kKeyGc), "induced");
-    }
-
+    Gc().Begin(*location);
     return kOk;
 }
 
 Hresult DIVISION_STDCALL GarbageCollectionFinished(void* self) {
     (void)self;
-    PopZone(kKeyGc);
+    Gc().End();
     return kOk;
 }
 
@@ -940,9 +1255,49 @@ Hresult DIVISION_STDCALL JitCompilationFinished(void* self, FunctionId function_
     return kOk;
 }
 
+/// Asked before searching for ahead-of-time code for a method (only with
+/// COR_PRF_MONITOR_CACHE_SEARCHES, which we do not set). TRUE: use it, as without a profiler.
+Hresult DIVISION_STDCALL JitCachedFunctionSearchStarted(void* self, FunctionId function_id, Bool32* use_cached_function) {
+    (void)self;
+    (void)function_id;
+
+    if (use_cached_function != nullptr) {
+        *use_cached_function = 1;
+    }
+
+    return kOk;
+}
+
+/// Asked for every inlining decision while COR_PRF_MONITOR_JIT_COMPILATION is set, which the jit
+/// and deep groups do. TRUE: inline as the JIT sees fit. Deep mode does not need it refused here -
+/// COR_PRF_MONITOR_ENTERLEAVE already turns inlining off - and refusing it otherwise would change
+/// the code being measured.
+Hresult DIVISION_STDCALL JitInlining(void* self, FunctionId caller_id, FunctionId callee_id, Bool32* should_inline) {
+    (void)self;
+    (void)caller_id;
+    (void)callee_id;
+
+    if (should_inline != nullptr) {
+        *should_inline = 1;
+    }
+
+    return kOk;
+}
+
+/// Asked once, at load, of an ICorProfilerCallback11 profiler. FALSE: this is the main profiler,
+/// not one of the notification-only ones that may be loaded alongside it.
+Hresult DIVISION_STDCALL LoadAsNotificationOnly(void* self, Bool32* notification_only) {
+    (void)self;
+
+    if (notification_only != nullptr) {
+        *notification_only = 0;
+    }
+
+    return kOk;
+}
+
 /// IL stubs, lambdas compiled through DynamicMethod, and the like. They are JIT compiled and so do
-/// carry hooks, but they have no metadata to name them - they are recorded under one shared name so
-/// that entering and leaving them stays consistent.
+/// carry hooks, but they have no metadata to name them - they are recorded under one shared name.
 Hresult DIVISION_STDCALL DynamicMethodJitCompilationFinished(void* self, FunctionId function_id, Hresult status, Bool32 safe_to_block) {
     (void)self;
     (void)safe_to_block;
@@ -983,13 +1338,13 @@ Hresult DIVISION_STDCALL ModuleLoadFinished(void* self, ModuleId module_id, Hres
 ///
 /// The enter half of the pair rather than the leave half, because only this one is told which
 /// function is being unwound - and frames without hooks are unwound too, so popping blindly would
-/// close zones belonging to somebody else.
+/// close frames belonging to somebody else. DeepPop only closes the innermost frame if it is this
+/// function's.
 Hresult DIVISION_STDCALL ExceptionUnwindFunctionEnter(void* self, FunctionId function_id) {
     (void)self;
 
-    const ___tracy_source_location_data* location = nullptr;
-    if ((g_categories & kCategoryDeep) != 0 && IsInstrumented(function_id, location)) {
-        PopZone(kKeyDeep);
+    if ((g_categories & kCategoryDeep) != 0) {
+        DeepPop(function_id);
     }
 
     return kOk;
@@ -1032,14 +1387,19 @@ const CallbackVtable& Vtable() {
         Put(built, CallbackSlot::RuntimeSuspendAborted, &RuntimeSuspendAborted);
         Put(built, CallbackSlot::RuntimeResumeStarted, &RuntimeResumeStarted);
         Put(built, CallbackSlot::RuntimeResumeFinished, &RuntimeResumeFinished);
+        Put(built, CallbackSlot::RuntimeThreadSuspended, &RuntimeThreadSuspended);
+        Put(built, CallbackSlot::RuntimeThreadResumed, &RuntimeThreadResumed);
         Put(built, CallbackSlot::GarbageCollectionStarted, &GarbageCollectionStarted);
         Put(built, CallbackSlot::GarbageCollectionFinished, &GarbageCollectionFinished);
         Put(built, CallbackSlot::JITCompilationStarted, &JitCompilationStarted);
         Put(built, CallbackSlot::JITCompilationFinished, &JitCompilationFinished);
+        Put(built, CallbackSlot::JITCachedFunctionSearchStarted, &JitCachedFunctionSearchStarted);
+        Put(built, CallbackSlot::JITInlining, &JitInlining);
         Put(built, CallbackSlot::ModuleLoadStarted, &ModuleLoadStarted);
         Put(built, CallbackSlot::ModuleLoadFinished, &ModuleLoadFinished);
         Put(built, CallbackSlot::DynamicMethodJITCompilationFinished, &DynamicMethodJitCompilationFinished);
         Put(built, CallbackSlot::ExceptionUnwindFunctionEnter, &ExceptionUnwindFunctionEnter);
+        Put(built, CallbackSlot::LoadAsNotificationOnly, &LoadAsNotificationOnly);
         return built;
     }();
 

@@ -46,7 +46,13 @@ internal sealed class BehaviorRun
         IsCompleted = true;
         if (BehaviorContext.Current is { } context)
         {
-            context.Graph.Scheduler.ReportError(new BehaviorFailedException(context.Name, exception));
+            // A failed turn is not running: cancelling it lets the start system start the behavior
+            // again from the top, the same as after a reload.
+            context.Cancel();
+            context.Graph.Scheduler.ReportError(
+                exception is BehaviorFailedException failed && failed.Behavior == context.Name
+                    ? failed // already attributed, e.g. rethrown from a background await
+                    : new BehaviorFailedException(context.Name, exception));
         }
     }
 }

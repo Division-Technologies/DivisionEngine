@@ -183,4 +183,49 @@ public sealed class StaticTransformTests
         Assert.DoesNotThrow(() => _world.MakeStatic(child));
         Assert.That(WorldPositionOf(child).X, Is.EqualTo(3f).Within(1e-5f));
     }
+
+    [Test]
+    public void MakeStatic_TagsTheWholeSubtree_AndMakeDynamicUntagsIt()
+    {
+        var root = _world.CreateTransform();
+        var child = _world.CreateTransform();
+        var grandchild = _world.CreateTransform();
+        _world.SetParent(child, root);
+        _world.SetParent(grandchild, child);
+
+        _world.MakeStatic(root);
+        Assert.That(new[] { root, child, grandchild }.Select(_world.IsStatic), Is.All.True);
+
+        var moving = _world.CreateTransform();
+        Assert.Throws<InvalidOperationException>(() => _world.SetParent(moving, grandchild),
+            "a moving entity cannot hang anywhere inside a static subtree, not only under its root");
+
+        _world.MakeDynamic(root);
+        Assert.That(new[] { root, child, grandchild }.Select(_world.IsStatic), Is.All.False);
+    }
+
+    [Test]
+    public void ReparentingAStaticSubtree_SettlesItsWorldTransformAgain()
+    {
+        var a = _world.CreateTransform(LocalTransform.FromPosition(new Vector3(10, 0, 0)));
+        var b = _world.CreateTransform(LocalTransform.FromPosition(new Vector3(1, 0, 0)));
+        var leaf = _world.CreateTransform(LocalTransform.FromPosition(new Vector3(0, 1, 0)));
+        _world.SetParent(leaf, b);
+        _world.MakeStatic(a);
+        _world.MakeStatic(b);
+
+        _world.SetParent(b, a);
+        Assert.Multiple(() =>
+        {
+            Assert.That(WorldPositionOf(b).X, Is.EqualTo(11f).Within(1e-5f), "under its new parent");
+            Assert.That(WorldPositionOf(leaf), Is.EqualTo(new Vector3(11, 1, 0)), "and so is its subtree");
+        });
+
+        _world.ClearParent(b);
+        Assert.Multiple(() =>
+        {
+            Assert.That(WorldPositionOf(b).X, Is.EqualTo(1f).Within(1e-5f), "relative to the world again");
+            Assert.That(WorldPositionOf(leaf), Is.EqualTo(new Vector3(1, 1, 0)));
+        });
+    }
 }
