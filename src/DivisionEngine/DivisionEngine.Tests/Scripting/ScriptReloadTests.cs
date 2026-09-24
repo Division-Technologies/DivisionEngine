@@ -25,12 +25,12 @@ public sealed class ScriptReloadTests
 
     private string _dir = "";
 
-    // A user Component that derives from the engine's Component (so it inherits Scope/Id) and
+    // A user type that derives from the engine's SerializableObject (so it inherits Scope/Id) and
     // serializes a single field. Implemented by hand so the test needs no source generator.
     private const string GreeterSource = """
                                          using DivisionEngine;
                                          namespace UserScripts;
-                                         public sealed class Greeter : Component, ISerializable
+                                         public sealed class Greeter : SerializableObject, ISerializable
                                          {
                                              public int Value;
                                              public void Serialize<T>(ref T s) where T : ISerializer, allows ref struct => s.I32(0, default, Value);

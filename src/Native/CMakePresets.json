@@ -7,26 +7,63 @@
   },
   "configurePresets": [
     {
-      "name": "clang-debug",
-      "displayName": "Clang Debug",
-      "description": "Configure a Debug build with Ninja and Clang from PATH.",
+      "name": "clang-base",
+      "hidden": true,
+      "description": "Common settings: Ninja, Clang, one build tree per preset.",
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/clang-debug",
+      "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_CXX_COMPILER": "clang++"
       }
     },
     {
-      "name": "clang-release",
-      "displayName": "Clang Release",
-      "description": "Configure a Release build with Ninja and Clang from PATH.",
-      "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/clang-release",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_CXX_COMPILER": "clang++"
+      "name": "homebrew-llvm",
+      "hidden": true,
+      "description": "Put Homebrew's LLVM ahead of the Apple toolchain on PATH. Apple Clang has C++20 modules disabled and ships no clang-scan-deps, so CMake cannot resolve the import graph of the core target with it. The formula is keg-only, hence the explicit prefix; adjust it to /usr/local on Intel Macs.",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "environment": {
+        "PATH": "/opt/homebrew/opt/llvm/bin:$penv{PATH}"
       }
+    },
+    {
+      "name": "clang-debug",
+      "inherits": "clang-base",
+      "displayName": "Clang Debug",
+      "description": "Configure a Debug build with Ninja and Clang from PATH. Needs a Clang that supports C++20 modules and a clang-scan-deps alongside it.",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "clang-release",
+      "inherits": "clang-base",
+      "displayName": "Clang Release",
+      "description": "Configure a Release build with Ninja and Clang from PATH. Needs a Clang that supports C++20 modules and a clang-scan-deps alongside it.",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "macos-clang-debug",
+      "inherits": [
+        "homebrew-llvm",
+        "clang-debug"
+      ],
+      "displayName": "Clang Debug (macOS)",
+      "description": "Configure a Debug build against Homebrew LLVM. The main target is Windows-only and will not build here; build core, test_main, tracy_client and clr_profiler instead."
+    },
+    {
+      "name": "macos-clang-release",
+      "inherits": [
+        "homebrew-llvm",
+        "clang-release"
+      ],
+      "displayName": "Clang Release (macOS)",
+      "description": "Configure a Release build against Homebrew LLVM. The main target is Windows-only and will not build here; build core, test_main, tracy_client and clr_profiler instead."
     }
   ],
   "buildPresets": [
@@ -37,12 +74,32 @@
     {
       "name": "clang-release",
       "configurePreset": "clang-release"
+    },
+    {
+      "name": "macos-clang-debug",
+      "configurePreset": "macos-clang-debug",
+      "targets": [
+        "core",
+        "test_main",
+        "tracy_client",
+        "clr_profiler"
+      ]
+    },
+    {
+      "name": "macos-clang-release",
+      "configurePreset": "macos-clang-release",
+      "targets": [
+        "core",
+        "test_main",
+        "tracy_client",
+        "clr_profiler"
+      ]
     }
   ],
   "testPresets": [
     {
-      "name": "clang-debug",
-      "configurePreset": "clang-debug",
+      "name": "test-base",
+      "hidden": true,
       "output": {
         "outputOnFailure": true,
         "verbosity": "default"
@@ -53,16 +110,24 @@
       }
     },
     {
+      "name": "clang-debug",
+      "inherits": "test-base",
+      "configurePreset": "clang-debug"
+    },
+    {
       "name": "clang-release",
-      "configurePreset": "clang-release",
-      "output": {
-        "outputOnFailure": true,
-        "verbosity": "default"
-      },
-      "execution": {
-        "noTestsAction": "error",
-        "stopOnFailure": false
-      }
+      "inherits": "test-base",
+      "configurePreset": "clang-release"
+    },
+    {
+      "name": "macos-clang-debug",
+      "inherits": "test-base",
+      "configurePreset": "macos-clang-debug"
+    },
+    {
+      "name": "macos-clang-release",
+      "inherits": "test-base",
+      "configurePreset": "macos-clang-release"
     }
   ]
 }

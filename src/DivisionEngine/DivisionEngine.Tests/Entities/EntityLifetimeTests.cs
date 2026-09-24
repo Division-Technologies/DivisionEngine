@@ -1,0 +1,149 @@
+namespace DivisionEngine.Tests.Entities;
+
+[TestFixture]
+public sealed class EntityLifetimeTests
+{
+    [Test]
+    public void CreateEntity_IsAlive_AndCounted()
+    {
+        using var world = new World();
+        var a = world.CreateEntity();
+        var b = world.CreateEntity();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(world.IsAlive(a), Is.True);
+            Assert.That(world.IsAlive(b), Is.True);
+            Assert.That(a, Is.Not.EqualTo(b));
+            Assert.That(world.EntityCount, Is.EqualTo(2));
+            Assert.That(world.GetArchetype(a).Types, Is.Empty);
+        });
+    }
+
+    [Test]
+    public void DestroyEntity_InvalidatesHandle_AndReusesIndexWithNewVersion()
+    {
+        using var world = new World();
+        var a = world.CreateEntity();
+        world.DestroyEntity(a);
+
+        Assert.That(world.IsAlive(a), Is.False);
+        Assert.That(world.EntityCount, Is.EqualTo(0));
+
+        var b = world.CreateEntity();
+        Assert.Multiple(() =>
+        {
+            Assert.That(b.Index, Is.EqualTo(a.Index), "slot is reused");
+            Assert.That(b.Version, Is.Not.EqualTo(a.Version), "version distinguishes the new occupant");
+            Assert.That(world.IsAlive(a), Is.False, "stale handle stays dead");
+            Assert.That(world.IsAlive(b), Is.True);
+        });
+    }
+
+    [Test]
+    public void NullAndStaleHandles_AreRejected()
+    {
+        using var world = new World();
+        var a = world.CreateEntity();
+        world.DestroyEntity(a);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(world.IsAlive(Entity.Null), Is.False);
+            Assert.That(() => world.DestroyEntity(a), Throws.TypeOf<EntityNotAliveException>());
+            Assert.That(() => world.DestroyEntity(Entity.Null), Throws.TypeOf<EntityNotAliveException>());
+            Assert.That(() => world.AddComponent<Position>(a), Throws.TypeOf<EntityNotAliveException>());
+        });
+    }
+
+    [Test]
+    public void CreateEntity_WithTypes_UsesThatArchetype_RegardlessOfOrder()
+    {
+        using var world = new World();
+        var a = world.CreateEntity(ComponentType<Velocity>.Id, ComponentType<Position>.Id);
+        var b = world.CreateEntity(ComponentType<Position>.Id, ComponentType<Velocity>.Id, ComponentType<Position>.Id);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(world.HasComponent<Position>(a), Is.True);
+            Assert.That(world.HasComponent<Velocity>(a), Is.True);
+            Assert.That(world.GetArchetype(a), Is.SameAs(world.GetArchetype(b)), "sorted and deduplicated");
+            Assert.That(world.GetComponent<Position>(a).X, Is.Zero, "zero-initialized");
+        });
+    }
+
+    [Test]
+    public void ManyEntities_GrowStorage()
+    {
+        using var world = new World();
+        var entities = new Entity[10_000];
+        for (var i = 0; i < entities.Length; i++)
+        {
+            entities[i] = world.CreateEntity();
+        }
+
+        for (var i = 0; i < entities.Length; i += 2)
+        {
+            world.DestroyEntity(entities[i]);
+        }
+
+        Assert.That(world.EntityCount, Is.EqualTo(5_000));
+        for (var i = 0; i < entities.Length; i++)
+        {
+            Assert.That(world.IsAlive(entities[i]), Is.EqualTo(i % 2 == 1));
+        }
+    }
+
+    [Test]
+    public void DisposedWorld_RejectsUse()
+    {
+        var world = new World();
+        var a = world.CreateEntity();
+        world.Dispose();
+        Assert.That(() => world.CreateEntity(), Throws.TypeOf<ObjectDisposedException>());
+        Assert.That(() => world.IsAlive(a), Throws.Nothing);
+        Assert.That(world.IsAlive(a), Is.False, "nothing is alive in a disposed world");
+    }
+
+    [Test]
+    public void Clear_RetiresEveryHandle()
+    {
+        using var world = new World();
+        var before = new[] { world.CreateEntity(), world.CreateEntity(), world.CreateEntity() };
+
+        world.Clear();
+        var after = new[] { world.CreateEntity(), world.CreateEntity(), world.CreateEntity() };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(before.Select(world.IsAlive), Is.All.False,
+                "a handle from before the clear must not name one of the new entities");
+            Assert.That(after, Is.Unique);
+            Assert.That(after.Intersect(before), Is.Empty);
+        });
+    }
+
+    [Test]
+    public void CreateEntityAt_BringsAHandleBack_AndTheFreeListSkipsItsIndex()
+    {
+        using var world = new World();
+        var kept = world.CreateEntity(ComponentType<Position>.Id);
+        world.CreateEntity();
+        world.Clear();
+
+        var restored = world.CreateEntityAt(kept, ComponentType<Position>.Id);
+        var beyond = world.CreateEntityAt(new Entity(10, 3));
+        var others = Enumerable.Range(0, 20).Select(_ => world.CreateEntity()).ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(restored, Is.EqualTo(kept));
+            Assert.That(world.IsAlive(kept) && world.IsAlive(beyond), Is.True);
+            Assert.That(world.HasComponent<Position>(kept), Is.True);
+            Assert.That(others.Select(e => e.Index), Is.Unique.And.No.Member(kept.Index).And.No.Member(10),
+                "indices taken by CreateEntityAt are never handed out again while in use");
+            Assert.That(world.EntityCount, Is.EqualTo(22));
+            Assert.That(() => world.CreateEntityAt(kept), Throws.InvalidOperationException, "index in use");
+        });
+    }
+}

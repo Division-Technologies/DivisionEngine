@@ -1,0 +1,4 @@
+# BenchmarkDotNet writes its artifacts into the current working directory, and the documented
+# benchmark command is run from the repository root (see Notes/Core/Handoff-EntityManagement.md).
+# The .NET projects under src/DivisionEngine have their own ignore file.
+BenchmarkDotNet.Artifacts/

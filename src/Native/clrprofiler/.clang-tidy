@@ -1,0 +1,9 @@
+# The CLR profiler is a COM object without a COM runtime, written against an ABI the runtime defines.
+# These checks fire on what that ABI requires rather than on choices this code makes, and would
+# otherwise need a NOLINT on nearly every callback. Anything else stays under the parent's rules.
+InheritParentConfig: true
+
+Checks: >
+  -cppcoreguidelines-pro-type-reinterpret-cast,
+  -bugprone-easily-swappable-parameters,
+  -cppcoreguidelines-avoid-non-const-global-variables

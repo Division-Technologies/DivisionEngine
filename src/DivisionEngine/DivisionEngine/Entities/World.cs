@@ -1,0 +1,820 @@
+namespace DivisionEngine;
+
+/// <summary>Thrown when an operation targets an entity handle that is null, stale, or deferred.</summary>
+public sealed class EntityNotAliveException(Entity entity)
+    : InvalidOperationException($"{entity} is not alive in this world.")
+{
+    public Entity Entity { get; } = entity;
+}
+
+/// <summary>
+///     Entity storage: a single id space, archetype/chunk storage for unmanaged components and
+///     per-chunk reference arrays for managed components, with structural changes applied
+///     immediately. Not thread-safe; concurrent access is scheduled by the job system
+///     (Notes/Core/JobSystem.md), and deferred structural changes go through
+///     <see cref="EntityCommandBuffer" />.
+/// </summary>
+public sealed class World : IDisposable
+{
+    private const int MaxStackTypes = 64;
+
+    private readonly Dictionary<ArchetypeKey, Archetype>.AlternateLookup<ReadOnlySpan<ComponentTypeId>>
+        _archetypeLookup;
+
+    private readonly List<Archetype> _archetypes = new();
+    private readonly Dictionary<ArchetypeKey, Archetype> _archetypesByKey = new(ArchetypeKey.Comparer.Instance);
+    private readonly Stack<int> _freeIndices = new();
+    private readonly Dictionary<QueryDescription, EntityQuery> _queries = new();
+    private bool _disposed;
+    private EntityLocation[] _locations = new EntityLocation[256];
+    private int _nextIndex;
+    private Archetype _rootArchetype;
+
+    /// <summary>Replaced rather than modified, so a destroy walks a snapshot without copying it.</summary>
+    private IStructuralHook[] _structuralHooks = [];
+
+    private int[] _versions = new int[256];
+
+    public World()
+    {
+        _archetypeLookup = _archetypesByKey.GetAlternateLookup<ReadOnlySpan<ComponentTypeId>>();
+        _rootArchetype = GetOrCreateArchetype([]);
+    }
+
+    public int EntityCount { get; private set; }
+
+    public IReadOnlyList<Archetype> Archetypes => _archetypes;
+
+    /// <summary>Incremented on every structural change; used to detect changes during iteration.</summary>
+    public int StructuralVersion { get; private set; }
+
+    // ----------------------------------------------------------------- hooks
+
+    public IReadOnlyList<IStructuralHook> StructuralHooks => _structuralHooks;
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        foreach (var archetype in _archetypes)
+        {
+            foreach (var chunk in archetype.Chunks)
+            {
+                chunk.Free();
+            }
+
+            archetype.Chunks.Clear();
+        }
+
+        // The locations point into the chunks just freed; with them gone nothing reads as alive.
+        Array.Clear(_locations);
+        EntityCount = 0;
+    }
+
+    /// <summary>
+    ///     Empties the world: every entity is gone, every chunk is freed, and the archetypes built so
+    ///     far are dropped. Cached queries are kept but reset, because systems hold references to them
+    ///     across the reload this exists for.
+    ///     <para>
+    ///         Handles are retired, not recycled from scratch: every index keeps counting its versions,
+    ///         so a handle taken before the clear stays dead instead of silently coming back as some
+    ///         unrelated entity. The one way back is <see cref="CreateEntityAt" />, which a reload uses to
+    ///         rebuild each entity under the very handle it had.
+    ///     </para>
+    ///     <para>
+    ///         Archetypes are keyed on <see cref="ComponentTypeId" />s, so this has to run before any
+    ///         component type is unregistered — see
+    ///         <see cref="ComponentTypeRegistry.UnregisterUnloadable" />.
+    ///     </para>
+    ///     Structural hooks survive; they belong to the engine, not to the contents.
+    /// </summary>
+    public void Clear()
+    {
+        ThrowIfDisposed();
+        JobSafety.AssertWrite(ResourceId.Structure);
+
+        foreach (var archetype in _archetypes)
+        {
+            foreach (var chunk in archetype.Chunks)
+            {
+                chunk.Free();
+            }
+
+            archetype.Chunks.Clear();
+        }
+
+        _archetypes.Clear();
+        _archetypesByKey.Clear();
+        _freeIndices.Clear();
+        for (var index = _nextIndex - 1; index >= 0; index--)
+        {
+            if (_locations[index].Chunk is not null)
+            {
+                RetireVersion(index);
+            }
+
+            _freeIndices.Push(index);
+        }
+
+        Array.Clear(_locations);
+        EntityCount = 0;
+        StructuralVersion++;
+
+        foreach (var query in _queries.Values)
+        {
+            query.Reset();
+        }
+
+        _rootArchetype = GetOrCreateArchetype([]);
+    }
+
+    // ---------------------------------------------------------------- entities
+
+    public Entity CreateEntity()
+    {
+        return CreateEntity(_rootArchetype);
+    }
+
+    /// <summary>Creates an entity whose components (zero-initialized / null) are exactly <paramref name="types" />.</summary>
+    public Entity CreateEntity(params ReadOnlySpan<ComponentTypeId> types)
+    {
+        return CreateEntity(GetOrCreateArchetypeUnsorted(types));
+    }
+
+    private Entity CreateEntity(Archetype archetype)
+    {
+        ThrowIfDisposed();
+        JobSafety.AssertWrite(ResourceId.Structure);
+        int index;
+        do
+        {
+            if (!_freeIndices.TryPop(out index))
+            {
+                index = AppendIndex();
+                break;
+            }
+
+            // CreateEntityAt takes indices without taking them off the stack, so an entry may be
+            // stale; the index it names is then in use and the entry is simply dropped.
+        } while (_locations[index].Chunk is not null);
+
+        return Place(new Entity(index, _versions[index]), archetype);
+    }
+
+    /// <summary>
+    ///     Creates an entity under exactly <paramref name="handle" />, so that handles taken before a
+    ///     <see cref="Clear" /> refer to it again. This is how a script reload gives every entity back
+    ///     its identity: the editor's selection, a system's cached target, an entity stored in a
+    ///     component all keep working. The index must not be in use.
+    /// </summary>
+    public Entity CreateEntityAt(Entity handle, params ReadOnlySpan<ComponentTypeId> types)
+    {
+        ThrowIfDisposed();
+        JobSafety.AssertWrite(ResourceId.Structure);
+        if (handle.Index < 0 || handle.Version <= 0)
+        {
+            throw new ArgumentException($"{handle} is not a handle an entity can be created under.", nameof(handle));
+        }
+
+        while (_nextIndex <= handle.Index)
+        {
+            var skipped = AppendIndex();
+            if (skipped != handle.Index)
+            {
+                _freeIndices.Push(skipped);
+            }
+        }
+
+        if (_locations[handle.Index].Chunk is not null)
+        {
+            throw new InvalidOperationException(
+                $"Index {handle.Index} is already in use by {new Entity(handle.Index, _versions[handle.Index])}.");
+        }
+
+        _versions[handle.Index] = handle.Version;
+        return Place(handle, GetOrCreateArchetypeUnsorted(types));
+    }
+
+    /// <summary>Whether some live entity, of whatever version, occupies <paramref name="index" />.</summary>
+    internal bool IsIndexInUse(int index)
+    {
+        return (uint)index < (uint)_nextIndex && _locations[index].Chunk is not null;
+    }
+
+    private int AppendIndex()
+    {
+        var index = _nextIndex++;
+        if (index == _versions.Length)
+        {
+            Array.Resize(ref _versions, index * 2);
+            Array.Resize(ref _locations, index * 2);
+        }
+
+        _versions[index] = 1;
+        return index;
+    }
+
+    private void RetireVersion(int index)
+    {
+        var version = _versions[index] + 1;
+        _versions[index] = version <= 0 ? 1 : version;
+    }
+
+    private Entity Place(Entity entity, Archetype archetype)
+    {
+        var index = entity.Index;
+        var (chunk, slot) = AllocateSlot(archetype);
+        chunk.SetEntity(slot, entity);
+        chunk.ClearData(slot);
+        _locations[index] = new EntityLocation(chunk, slot);
+        EntityCount++;
+        StructuralVersion++;
+        return entity;
+    }
+
+    public void DestroyEntity(Entity entity)
+    {
+        JobSafety.AssertWrite(ResourceId.Structure);
+        if (_structuralHooks.Length > 0)
+        {
+            ThrowIfDisposed();
+            if (!IsAlive(entity))
+            {
+                throw new EntityNotAliveException(entity);
+            }
+
+            // Hooks may destroy further entities, which can move this one within its chunk, so the
+            // location is only looked up afterwards.
+            // A snapshot, so that a hook adding or removing hooks neither invalidates the walk nor
+            // makes it skip the hook after the removed one.
+            foreach (var hook in _structuralHooks)
+            {
+                hook.OnBeforeDestroy(this, entity);
+            }
+
+            if (!IsAlive(entity))
+            {
+                return;
+            }
+        }
+
+        ref var location = ref GetLocation(entity);
+        RemoveFromChunk(location.Chunk!, location.Index);
+        location = default;
+        RetireVersion(entity.Index);
+        _freeIndices.Push(entity.Index);
+        EntityCount--;
+        StructuralVersion++;
+    }
+
+    public bool IsAlive(Entity entity)
+    {
+        return (uint)entity.Index < (uint)_nextIndex
+               && entity.Version != 0
+               && _versions[entity.Index] == entity.Version
+               && _locations[entity.Index].Chunk is not null;
+    }
+
+    public Archetype GetArchetype(Entity entity)
+    {
+        return GetLocation(entity).Chunk!.Archetype;
+    }
+
+    /// <summary>
+    ///     Registers a hook that maintains cross-entity invariants across structural changes.
+    ///     Registering the same hook twice is a no-op, so features can call this lazily when first
+    ///     used rather than requiring the world to be configured up front.
+    /// </summary>
+    public void AddStructuralHook(IStructuralHook hook)
+    {
+        ArgumentNullException.ThrowIfNull(hook);
+        ThrowIfDisposed();
+        if (Array.IndexOf(_structuralHooks, hook) < 0)
+        {
+            _structuralHooks = [.. _structuralHooks, hook];
+        }
+    }
+
+    public bool RemoveStructuralHook(IStructuralHook hook)
+    {
+        if (Array.IndexOf(_structuralHooks, hook) < 0)
+        {
+            return false;
+        }
+
+        _structuralHooks = Array.FindAll(_structuralHooks, h => h != hook);
+        return true;
+    }
+
+    // -------------------------------------------------------------- components
+
+    public bool HasComponent<T>(Entity entity)
+    {
+        return HasComponent(entity, ComponentType<T>.Id);
+    }
+
+    public bool HasComponent(Entity entity, ComponentTypeId type)
+    {
+        return GetLocation(entity).Chunk!.Archetype.Has(type);
+    }
+
+    /// <summary>Adds an unmanaged component. For classes use <see cref="AddManagedComponent{T}" />.</summary>
+    public void AddComponent<T>(Entity entity, in T value = default) where T : unmanaged
+    {
+        var info = ComponentType<T>.Info;
+        ref var location = ref GetLocation(entity);
+        AddToArchetype(entity, ref location, info);
+        if (info.HasChunkData)
+        {
+            location.Chunk!.GetRef<T>(location.Chunk.Archetype.SlotOf(info.Id), location.Index) = value;
+        }
+    }
+
+    /// <summary>
+    ///     Non-generic form of <see cref="AddComponent{T}" />; <paramref name="value" /> must be exactly the component's
+    ///     size.
+    /// </summary>
+    public void AddComponent(Entity entity, ComponentTypeId type, ReadOnlySpan<byte> value)
+    {
+        var info = ComponentTypeRegistry.GetInfo(type);
+        ThrowIfManaged(info);
+        ThrowIfWrongSize(info, value);
+        ref var location = ref GetLocation(entity);
+        AddToArchetype(entity, ref location, info);
+        WriteData(location, info, value);
+    }
+
+    public void SetComponent<T>(Entity entity, in T value) where T : unmanaged
+    {
+        GetComponent<T>(entity) = value;
+    }
+
+    /// <summary>
+    ///     Copies an unmanaged component's bytes out; <paramref name="destination" /> must be exactly the component's
+    ///     size.
+    /// </summary>
+    public void CopyComponent(Entity entity, ComponentTypeId type, Span<byte> destination)
+    {
+        var info = ComponentTypeRegistry.GetInfo(type);
+        JobSafety.AssertRead(ResourceId.Component(type));
+        ThrowIfManaged(info);
+        ThrowIfWrongSize(info, destination);
+        ref var location = ref GetLocation(entity);
+        ThrowIfMissing(location, info);
+        CopyComponentUnchecked(location, info, destination);
+    }
+
+    /// <summary>Component bytes without the type-level safety check; callers have verified entity-level access.</summary>
+    internal void CopyComponentUnchecked(Entity entity, ComponentTypeInfo info, Span<byte> destination)
+    {
+        ref var location = ref GetLocation(entity);
+        ThrowIfMissing(location, info);
+        CopyComponentUnchecked(location, info, destination);
+    }
+
+    private static unsafe void CopyComponentUnchecked(in EntityLocation location, ComponentTypeInfo info,
+        Span<byte> destination)
+    {
+        if (info.Size == 0)
+        {
+            return;
+        }
+
+        var chunk = location.Chunk!;
+        new ReadOnlySpan<byte>(chunk.GetPointer(chunk.Archetype.SlotOf(info.Id), location.Index), info.Size)
+            .CopyTo(destination);
+    }
+
+    public void SetComponent(Entity entity, ComponentTypeId type, ReadOnlySpan<byte> value)
+    {
+        var info = ComponentTypeRegistry.GetInfo(type);
+        JobSafety.AssertWrite(ResourceId.Component(type));
+        ThrowIfManaged(info);
+        ThrowIfWrongSize(info, value);
+        ref var location = ref GetLocation(entity);
+        ThrowIfMissing(location, info);
+        WriteData(location, info, value);
+    }
+
+    /// <summary>
+    ///     Returns a writable reference to an unmanaged component (requires write access inside a
+    ///     job). The reference is invalidated by any structural change.
+    /// </summary>
+    public ref T GetComponent<T>(Entity entity) where T : unmanaged
+    {
+        var info = ComponentType<T>.Info;
+        JobSafety.AssertWrite(ResourceId.Component(info.Id));
+        return ref GetComponentRef<T>(entity, info);
+    }
+
+    /// <summary>Read-only counterpart of <see cref="GetComponent{T}" /> (requires read access inside a job).</summary>
+    public ref readonly T GetComponentReadOnly<T>(Entity entity) where T : unmanaged
+    {
+        var info = ComponentType<T>.Info;
+        JobSafety.AssertRead(ResourceId.Component(info.Id));
+        return ref GetComponentRef<T>(entity, info);
+    }
+
+    /// <summary>Component reference without the type-level safety check; callers have verified entity-level access.</summary>
+    internal ref T GetComponentRefUnchecked<T>(Entity entity) where T : unmanaged
+    {
+        return ref GetComponentRef<T>(entity, ComponentType<T>.Info);
+    }
+
+    private ref T GetComponentRef<T>(Entity entity, ComponentTypeInfo info) where T : unmanaged
+    {
+        ThrowIfManaged(info);
+        if (info.IsTag)
+        {
+            throw new InvalidOperationException($"{info.Type} is a tag component and has no data.");
+        }
+
+        ref var location = ref GetLocation(entity);
+        var slot = location.Chunk!.Archetype.SlotOf(info.Id);
+        if (slot < 0)
+        {
+            throw new InvalidOperationException($"{entity} has no {info.Type} component.");
+        }
+
+        return ref location.Chunk.GetRef<T>(slot, location.Index);
+    }
+
+    public void RemoveComponent<T>(Entity entity)
+    {
+        RemoveComponent(entity, ComponentType<T>.Id);
+    }
+
+    public void RemoveComponent(Entity entity, ComponentTypeId type)
+    {
+        ref var location = ref GetLocation(entity);
+        var source = location.Chunk!.Archetype;
+        if (!source.Has(type))
+        {
+            throw new InvalidOperationException(
+                $"{entity} has no {ComponentTypeRegistry.GetInfo(type).Type} component.");
+        }
+
+        MoveEntity(entity, ref location, ArchetypeWithRemoved(source, type));
+    }
+
+    public void AddManagedComponent<T>(Entity entity, T value) where T : class
+    {
+        AddManagedComponent(entity, ComponentType<T>.Id, value);
+    }
+
+    public void AddManagedComponent(Entity entity, ComponentTypeId type, object value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        var info = ComponentTypeRegistry.GetInfo(type);
+        ThrowIfNotManaged(info, value);
+        ref var location = ref GetLocation(entity);
+        AddToArchetype(entity, ref location, info);
+        WriteManaged(location, info, value);
+    }
+
+    public T GetManagedComponent<T>(Entity entity) where T : class
+    {
+        return (T)GetManagedComponent(entity, ComponentType<T>.Id);
+    }
+
+    /// <summary>
+    ///     Non-generic form of <see cref="GetManagedComponent{T}" />, for callers that only have a
+    ///     <see cref="ComponentTypeId" /> — saving a scene, for instance, where constructing the
+    ///     closed generic would mean reflecting over the type.
+    /// </summary>
+    public object GetManagedComponent(Entity entity, ComponentTypeId type)
+    {
+        var info = ComponentTypeRegistry.GetInfo(type);
+        JobSafety.AssertRead(ResourceId.Component(info.Id));
+        ThrowIfNotManaged(info, null);
+        ref var location = ref GetLocation(entity);
+        var slot = location.Chunk!.Archetype.SlotOf(info.Id);
+        if (slot < 0)
+        {
+            throw new InvalidOperationException($"{entity} has no {info.Type} component.");
+        }
+
+        return location.Chunk.GetManagedArray(slot)[location.Index]!;
+    }
+
+    public void SetManagedComponent<T>(Entity entity, T value) where T : class
+    {
+        SetManagedComponent(entity, ComponentType<T>.Id, value);
+    }
+
+    public void SetManagedComponent(Entity entity, ComponentTypeId type, object value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        var info = ComponentTypeRegistry.GetInfo(type);
+        JobSafety.AssertWrite(ResourceId.Component(type));
+        ThrowIfNotManaged(info, value);
+        ref var location = ref GetLocation(entity);
+        ThrowIfMissing(location, info);
+        WriteManaged(location, info, value);
+    }
+
+    // ------------------------------------------------------------------ queries
+
+    public QueryBuilder Query()
+    {
+        return new QueryBuilder(this);
+    }
+
+    public EntityQuery GetQuery(QueryDescription description)
+    {
+        ThrowIfDisposed();
+        if (!_queries.TryGetValue(description, out var query))
+        {
+            query = new EntityQuery(this, description);
+            _queries.Add(description, query);
+        }
+
+        return query;
+    }
+
+    // --------------------------------------------------------------- archetypes
+
+    internal Archetype GetOrCreateArchetype(ReadOnlySpan<ComponentTypeId> sortedTypes)
+    {
+        if (_archetypeLookup.TryGetValue(sortedTypes, out var archetype))
+        {
+            return archetype;
+        }
+
+        archetype = new Archetype(_archetypes.Count, sortedTypes);
+        _archetypesByKey.Add(new ArchetypeKey(archetype.Types), archetype);
+        _archetypes.Add(archetype);
+        return archetype;
+    }
+
+    private Archetype GetOrCreateArchetypeUnsorted(ReadOnlySpan<ComponentTypeId> types)
+    {
+        ThrowIfDisposed();
+        if (types.Length == 0)
+        {
+            return _rootArchetype;
+        }
+
+        var sorted = types.Length <= MaxStackTypes
+            ? stackalloc ComponentTypeId[types.Length]
+            : new ComponentTypeId[types.Length];
+        types.CopyTo(sorted);
+        SortByValue(sorted);
+
+        // Dedupe in place.
+        var write = 1;
+        for (var read = 1; read < sorted.Length; read++)
+        {
+            if (sorted[read] != sorted[write - 1])
+            {
+                sorted[write++] = sorted[read];
+            }
+        }
+
+        return GetOrCreateArchetype(sorted[..write]);
+    }
+
+    private Archetype ArchetypeWithAdded(Archetype source, ComponentTypeId type)
+    {
+        if (source.AddEdges.TryGetValue(type, out var target))
+        {
+            return target;
+        }
+
+        var count = source.Types.Length + 1;
+        var types = count <= MaxStackTypes ? stackalloc ComponentTypeId[count] : new ComponentTypeId[count];
+        var write = 0;
+        var inserted = false;
+        foreach (var existing in source.Types)
+        {
+            if (!inserted && type.Value < existing.Value)
+            {
+                types[write++] = type;
+                inserted = true;
+            }
+
+            types[write++] = existing;
+        }
+
+        if (!inserted)
+        {
+            types[write] = type;
+        }
+
+        target = GetOrCreateArchetype(types);
+        source.AddEdges[type] = target;
+        target.RemoveEdges[type] = source;
+        return target;
+    }
+
+    private Archetype ArchetypeWithRemoved(Archetype source, ComponentTypeId type)
+    {
+        if (source.RemoveEdges.TryGetValue(type, out var target))
+        {
+            return target;
+        }
+
+        var count = source.Types.Length - 1;
+        var types = count <= MaxStackTypes ? stackalloc ComponentTypeId[count] : new ComponentTypeId[count];
+        var write = 0;
+        foreach (var existing in source.Types)
+        {
+            if (existing != type)
+            {
+                types[write++] = existing;
+            }
+        }
+
+        target = GetOrCreateArchetype(types);
+        source.RemoveEdges[type] = target;
+        target.AddEdges[type] = source;
+        return target;
+    }
+
+    private static void SortByValue(Span<ComponentTypeId> types)
+    {
+        // Insertion sort: type lists are short.
+        for (var i = 1; i < types.Length; i++)
+        {
+            var current = types[i];
+            var j = i - 1;
+            while (j >= 0 && types[j].Value > current.Value)
+            {
+                types[j + 1] = types[j];
+                j--;
+            }
+
+            types[j + 1] = current;
+        }
+    }
+
+    // ------------------------------------------------------------ chunk storage
+
+    private static (Chunk chunk, int index) AllocateSlot(Archetype archetype)
+    {
+        var chunks = archetype.Chunks;
+        Chunk chunk;
+        if (chunks.Count == 0 || chunks[^1].IsFull)
+        {
+            chunk = new Chunk(archetype);
+            chunks.Add(chunk);
+        }
+        else
+        {
+            chunk = chunks[^1];
+        }
+
+        var index = chunk.Count;
+        chunk.Count = index + 1;
+        archetype.EntityCount++;
+        return (chunk, index);
+    }
+
+    /// <summary>
+    ///     Vacates a slot, keeping the archetype dense: the chunk's last entity fills the hole, and if
+    ///     the chunk is not the archetype's last chunk, the last chunk's last entity moves in so that
+    ///     only the last chunk is ever partially filled. Empty trailing chunks are freed.
+    /// </summary>
+    private void RemoveFromChunk(Chunk chunk, int index)
+    {
+        var archetype = chunk.Archetype;
+        var chunks = archetype.Chunks;
+
+        var last = chunk.Count - 1;
+        if (index != last)
+        {
+            chunk.CopyWithin(last, index);
+            _locations[chunk.Entities[index].Index] = new EntityLocation(chunk, index);
+        }
+
+        chunk.ClearManaged(last);
+        chunk.Count = last;
+        archetype.EntityCount--;
+
+        var lastChunk = chunks[^1];
+        if (chunk != lastChunk)
+        {
+            var sourceIndex = lastChunk.Count - 1;
+            var targetIndex = chunk.Count;
+            Chunk.CopyAcross(lastChunk, sourceIndex, chunk, targetIndex);
+            chunk.Count = targetIndex + 1;
+            _locations[chunk.Entities[targetIndex].Index] = new EntityLocation(chunk, targetIndex);
+            lastChunk.ClearManaged(sourceIndex);
+            lastChunk.Count = sourceIndex;
+        }
+
+        if (lastChunk.Count == 0)
+        {
+            chunks.RemoveAt(chunks.Count - 1);
+            lastChunk.Free();
+        }
+    }
+
+    private void MoveEntity(Entity entity, ref EntityLocation location, Archetype target)
+    {
+        JobSafety.AssertWrite(ResourceId.Structure);
+        var sourceChunk = location.Chunk!;
+        var sourceIndex = location.Index;
+        var (targetChunk, targetIndex) = AllocateSlot(target);
+        Chunk.CopyAcross(sourceChunk, sourceIndex, targetChunk, targetIndex);
+        location = new EntityLocation(targetChunk, targetIndex);
+        RemoveFromChunk(sourceChunk, sourceIndex);
+        StructuralVersion++;
+    }
+
+    private void AddToArchetype(Entity entity, ref EntityLocation location, ComponentTypeInfo info)
+    {
+        var source = location.Chunk!.Archetype;
+        if (source.Has(info.Id))
+        {
+            throw new InvalidOperationException($"{entity} already has a {info.Type} component.");
+        }
+
+        MoveEntity(entity, ref location, ArchetypeWithAdded(source, info.Id));
+    }
+
+    private static unsafe void WriteData(in EntityLocation location, ComponentTypeInfo info, ReadOnlySpan<byte> value)
+    {
+        if (info.Size == 0)
+        {
+            return;
+        }
+
+        var chunk = location.Chunk!;
+        var destination = new Span<byte>(chunk.GetPointer(chunk.Archetype.SlotOf(info.Id), location.Index), info.Size);
+        value.CopyTo(destination);
+    }
+
+    private static void WriteManaged(in EntityLocation location, ComponentTypeInfo info, object value)
+    {
+        var chunk = location.Chunk!;
+        chunk.GetManagedArray(chunk.Archetype.SlotOf(info.Id))[location.Index] = value;
+    }
+
+    // -------------------------------------------------------------- validation
+
+    private ref EntityLocation GetLocation(Entity entity)
+    {
+        ThrowIfDisposed();
+        JobSafety.AssertRead(ResourceId.Structure);
+        if (!IsAlive(entity))
+        {
+            throw new EntityNotAliveException(entity);
+        }
+
+        return ref _locations[entity.Index];
+    }
+
+    private static void ThrowIfMissing(in EntityLocation location, ComponentTypeInfo info)
+    {
+        if (!location.Chunk!.Archetype.Has(info.Id))
+        {
+            throw new InvalidOperationException(
+                $"{location.Chunk.Entities[location.Index]} has no {info.Type} component.");
+        }
+    }
+
+    private static void ThrowIfManaged(ComponentTypeInfo info)
+    {
+        if (info.IsManaged)
+        {
+            throw new ArgumentException($"{info.Type} is a managed component; use the *ManagedComponent methods.");
+        }
+    }
+
+    private static void ThrowIfNotManaged(ComponentTypeInfo info, object? value)
+    {
+        if (!info.IsManaged)
+        {
+            throw new ArgumentException($"{info.Type} is an unmanaged component; use the non-managed methods.");
+        }
+
+        if (value is not null && !info.Type.IsInstanceOfType(value))
+        {
+            throw new ArgumentException($"Value of type {value.GetType()} is not a {info.Type}.");
+        }
+    }
+
+    private static void ThrowIfWrongSize(ComponentTypeInfo info, ReadOnlySpan<byte> value)
+    {
+        if (value.Length != info.Size)
+        {
+            throw new ArgumentException($"{info.Type} is {info.Size} bytes but {value.Length} were given.");
+        }
+    }
+
+    private void ThrowIfDisposed()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+    }
+
+    private readonly struct EntityLocation(Chunk chunk, int index)
+    {
+        public readonly Chunk? Chunk = chunk;
+        public readonly int Index = index;
+    }
+}
