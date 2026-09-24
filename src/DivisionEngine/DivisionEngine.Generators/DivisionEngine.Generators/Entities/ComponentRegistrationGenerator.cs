@@ -148,7 +148,8 @@ public sealed class ComponentRegistrationGenerator : IIncrementalGenerator
     private static void Emit(SourceProductionContext spc, ComponentRegistrationInfo info)
     {
         var body = new StringBuilder();
-        body.Append($"            global::DivisionEngine.ComponentTypeRegistry.RegisterComponent<{info.FullTypeRef}>();");
+        body.Append(
+            $"            global::DivisionEngine.ComponentTypeRegistry.RegisterComponent<{info.FullTypeRef}>();");
 
         if (info.RegisterValueSerializer)
         {
@@ -160,7 +161,8 @@ public sealed class ComponentRegistrationGenerator : IIncrementalGenerator
         var paths = info.EntityFieldPaths.AsImmutableArray();
         if (paths.Length > 0)
         {
-            var assignments = string.Join("\n", paths.Select(static p => $"                    {p} = map.Resolve({p});"));
+            var assignments = string.Join("\n",
+                paths.Select(static p => $"                    {p} = map.Resolve({p});"));
             body.AppendLine();
             body.Append($$"""
                                       global::DivisionEngine.ComponentTypeRegistry.RegisterEntityFields<{{info.FullTypeRef}}>(

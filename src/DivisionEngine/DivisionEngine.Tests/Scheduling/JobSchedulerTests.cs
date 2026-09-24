@@ -165,7 +165,8 @@ public sealed class JobSchedulerTests
         using (world)
         {
             var threadId = -1;
-            var handle = graph.ScheduleOnMainThread("main", AccessSet.None, _ => threadId = Environment.CurrentManagedThreadId);
+            var handle = graph.ScheduleOnMainThread("main", AccessSet.None,
+                _ => threadId = Environment.CurrentManagedThreadId);
             graph.Wait(handle);
             Assert.That(threadId, Is.EqualTo(Environment.CurrentManagedThreadId));
 
@@ -285,7 +286,8 @@ public sealed class JobSchedulerTests
             var query = world.Query().With<Health>().Build();
             var seen = 0;
             graph.SchedulePlayback(ecb);
-            graph.ScheduleChunks("count", query, Access.Read<Health>(), (in _, chunk) => Interlocked.Add(ref seen, chunk.Count));
+            graph.ScheduleChunks("count", query, Access.Read<Health>(),
+                (in _, chunk) => Interlocked.Add(ref seen, chunk.Count));
             graph.WaitAll();
 
             Assert.That(seen, Is.EqualTo(10), "chunks are snapshotted when the job becomes ready, after playback");

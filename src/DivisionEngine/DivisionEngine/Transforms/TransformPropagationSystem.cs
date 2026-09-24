@@ -21,8 +21,12 @@ namespace DivisionEngine;
 ///         parallel.
 ///     </para>
 ///     <para>
-///         Without that, the unit of parallelism was a chunk of roots <em>plus everything underneath
-///         it</em>, so a scene with one heavy root ran almost serially no matter how many workers
+///         Without that, the unit of parallelism was a chunk of roots
+///         <em>
+///             plus everything underneath
+///             it
+///         </em>
+///         , so a scene with one heavy root ran almost serially no matter how many workers
 ///         were free - 100 roots with one of them holding 80% of the entities measured 1.26x on eight
 ///         threads, against the 1.25x that Amdahl allows for an indivisible 80%. Deferring by
 ///         individual child is what makes that subtree divisible. See Notes/Core/SceneManagement.md.
@@ -61,12 +65,12 @@ public sealed class TransformPropagationSystem : IJobSystem
 
     private readonly Frontier[] _frontiers = CreateFrontiers();
 
+    private EntityQuery? _branchingRoots;
+    private RangeJob[]? _deferredJobs;
+    private EntityQuery? _roots;
+
     /// <summary>Cached so that issuing costs no closure allocation per frame.</summary>
     private ChunkJob? _rootsJob;
-    private RangeJob[]? _deferredJobs;
-
-    private EntityQuery? _branchingRoots;
-    private EntityQuery? _roots;
 
     public void Schedule(in JobSchedulingContext context)
     {
@@ -111,7 +115,8 @@ public sealed class TransformPropagationSystem : IJobSystem
         var jobs = DeferredJobs();
         for (var pass = 0; pass < _frontiers.Length; pass++)
         {
-            handle = graph.ScheduleBatches($"TransformPropagation.Deferred{pass}", _frontiers[pass].Take, access, jobs[pass]);
+            handle = graph.ScheduleBatches($"TransformPropagation.Deferred{pass}", _frontiers[pass].Take, access,
+                jobs[pass]);
         }
 
         return handle;
@@ -120,7 +125,7 @@ public sealed class TransformPropagationSystem : IJobSystem
     private ChunkJob RootsJob()
     {
         var first = _frontiers[0];
-        return _rootsJob ??= (in JobContext job, ArchetypeChunk chunk) => PropagateRoots(job.World, chunk, first);
+        return _rootsJob ??= (in job, chunk) => PropagateRoots(job.World, chunk, first);
     }
 
     private RangeJob[] DeferredJobs()
@@ -138,7 +143,7 @@ public sealed class TransformPropagationSystem : IJobSystem
             var overflow = pass + 1 < _frontiers.Length ? _frontiers[pass + 1] : null;
             var itemBudget = overflow is null ? int.MaxValue : WorkBudget;
 
-            jobs[pass] = (in JobContext job, int start, int end) =>
+            jobs[pass] = (in job, start, end) =>
             {
                 for (var i = start; i < end; i++)
                 {
@@ -198,7 +203,8 @@ public sealed class TransformPropagationSystem : IJobSystem
     }
 
     /// <summary>Writes one entity's world transform and descends into it.</summary>
-    private static void PropagateOne(World world, Entity entity, in Matrix4x4 parent, Frontier? overflow, ref int budget)
+    private static void PropagateOne(World world, Entity entity, in Matrix4x4 parent, Frontier? overflow,
+        ref int budget)
     {
         var matrix = parent;
         if (world.HasComponent<LocalTransform>(entity))
@@ -220,7 +226,8 @@ public sealed class TransformPropagationSystem : IJobSystem
     ///     Walks a sibling chain iteratively and descends one level per recursion, so the stack grows
     ///     with the depth of the hierarchy rather than with the number of entities in it.
     /// </summary>
-    private static void PropagateSubtree(World world, Entity entity, in Matrix4x4 parent, Frontier? overflow, ref int budget)
+    private static void PropagateSubtree(World world, Entity entity, in Matrix4x4 parent, Frontier? overflow,
+        ref int budget)
     {
         while (!entity.IsNull)
         {

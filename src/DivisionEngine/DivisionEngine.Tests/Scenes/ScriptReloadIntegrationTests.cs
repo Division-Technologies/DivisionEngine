@@ -23,8 +23,6 @@ public partial struct Score
 [TestFixture]
 public sealed class ScriptReloadIntegrationTests
 {
-    private string _dir = "";
-
     [SetUp]
     public void SetUp()
     {
@@ -40,6 +38,8 @@ public sealed class ScriptReloadIntegrationTests
             Directory.Delete(_dir, true);
         }
     }
+
+    private string _dir = "";
 
     private sealed class Ticker : Behavior
     {

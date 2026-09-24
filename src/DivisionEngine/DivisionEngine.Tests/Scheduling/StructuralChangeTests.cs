@@ -11,8 +11,6 @@ namespace DivisionEngine.Tests.Scheduling;
 [TestFixture]
 public sealed class StructuralChangeTests
 {
-    private Engine _engine = null!;
-
     [SetUp]
     public void SetUp()
     {
@@ -24,6 +22,8 @@ public sealed class StructuralChangeTests
     {
         _engine.Dispose();
     }
+
+    private Engine _engine = null!;
 
     private static Realtime At(double seconds)
     {

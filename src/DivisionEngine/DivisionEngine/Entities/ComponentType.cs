@@ -93,23 +93,27 @@ internal delegate void RawEntityFieldRemapper(Span<byte> value, EntityRemap map)
 /// </summary>
 public interface IComponentValueSerializer
 {
-    void Serialize<TSerializer>(ref TSerializer serializer, int id, ReadOnlySpan<byte> hintUtf8, ReadOnlySpan<byte> value)
+    void Serialize<TSerializer>(ref TSerializer serializer, int id, ReadOnlySpan<byte> hintUtf8,
+        ReadOnlySpan<byte> value)
         where TSerializer : ISerializer, allows ref struct;
 
-    void Deserialize<TDeserializer>(ref TDeserializer deserializer, int id, ReadOnlySpan<byte> hintUtf8, Span<byte> value)
+    void Deserialize<TDeserializer>(ref TDeserializer deserializer, int id, ReadOnlySpan<byte> hintUtf8,
+        Span<byte> value)
         where TDeserializer : IDeserializer, allows ref struct;
 }
 
 /// <summary>Bridges <see cref="IComponentValueSerializer" /> to the type's registered <see cref="IValueFormatter{T}" />.</summary>
 internal sealed class ComponentValueSerializer<T> : IComponentValueSerializer where T : unmanaged
 {
-    public void Serialize<TSerializer>(ref TSerializer serializer, int id, ReadOnlySpan<byte> hintUtf8, ReadOnlySpan<byte> value)
+    public void Serialize<TSerializer>(ref TSerializer serializer, int id, ReadOnlySpan<byte> hintUtf8,
+        ReadOnlySpan<byte> value)
         where TSerializer : ISerializer, allows ref struct
     {
         FormatterStore<T>.Formatter.Serialize(ref serializer, id, hintUtf8, in MemoryMarshal.AsRef<T>(value));
     }
 
-    public void Deserialize<TDeserializer>(ref TDeserializer deserializer, int id, ReadOnlySpan<byte> hintUtf8, Span<byte> value)
+    public void Deserialize<TDeserializer>(ref TDeserializer deserializer, int id, ReadOnlySpan<byte> hintUtf8,
+        Span<byte> value)
         where TDeserializer : IDeserializer, allows ref struct
     {
         MemoryMarshal.AsRef<T>(value) = FormatterStore<T>.Formatter.Deserialize(ref deserializer, id, hintUtf8);

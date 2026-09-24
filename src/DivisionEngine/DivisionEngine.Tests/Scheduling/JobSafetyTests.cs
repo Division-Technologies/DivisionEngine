@@ -5,11 +5,6 @@ namespace DivisionEngine.Tests.Scheduling;
 [TestFixture]
 public sealed class JobSafetyTests
 {
-    private bool _enabledBefore;
-    private JobScheduler _scheduler = null!;
-    private World _world = null!;
-    private JobGraph _graph = null!;
-
     [SetUp]
     public void SetUp()
     {
@@ -32,16 +27,23 @@ public sealed class JobSafetyTests
         JobSafety.Enabled = _enabledBefore;
     }
 
+    private bool _enabledBefore;
+    private JobScheduler _scheduler = null!;
+    private World _world = null!;
+    private JobGraph _graph = null!;
+
     private static void AssertViolation(TestDelegate action)
     {
-        Assert.That(action, Throws.TypeOf<JobFailedException>().With.InnerException.TypeOf<JobAccessViolationException>());
+        Assert.That(action,
+            Throws.TypeOf<JobFailedException>().With.InnerException.TypeOf<JobAccessViolationException>());
     }
 
     [Test]
     public void UndeclaredWrite_ThroughChunk_IsRejected()
     {
         var query = _world.Query().With<Position>().Build();
-        var handle = _graph.ScheduleChunks("read-only", query, Access.Read<Position>(), (in _, chunk) => chunk.GetSpan<Position>());
+        var handle = _graph.ScheduleChunks("read-only", query, Access.Read<Position>(),
+            (in _, chunk) => chunk.GetSpan<Position>());
         AssertViolation(() => _graph.Wait(handle));
     }
 
@@ -72,10 +74,12 @@ public sealed class JobSafetyTests
             target = chunk.Entities[0];
         }
 
-        var write = _graph.Schedule("write health", Access.Read<Position>(), ctx => ctx.World.GetComponent<Health>(target).Value = 1);
+        var write = _graph.Schedule("write health", Access.Read<Position>(),
+            ctx => ctx.World.GetComponent<Health>(target).Value = 1);
         AssertViolation(() => _graph.Wait(write));
 
-        var readOnly = _graph.Schedule("read health", Access.Read<Health>(), ctx => _ = ctx.World.GetComponentReadOnly<Health>(target).Value);
+        var readOnly = _graph.Schedule("read health", Access.Read<Health>(),
+            ctx => _ = ctx.World.GetComponentReadOnly<Health>(target).Value);
         Assert.That(() => _graph.Wait(readOnly), Throws.Nothing);
 
         var none = _graph.Schedule("none", AccessSet.None, ctx => ctx.World.IsAlive(target));
@@ -118,7 +122,8 @@ public sealed class JobSafetyTests
     {
         JobSafety.Enabled = false;
         var query = _world.Query().With<Position>().Build();
-        var handle = _graph.ScheduleChunks("unchecked", query, AccessSet.None, (in _, chunk) => chunk.GetSpan<Position>());
+        var handle = _graph.ScheduleChunks("unchecked", query, AccessSet.None,
+            (in _, chunk) => chunk.GetSpan<Position>());
         Assert.That(() => _graph.Wait(handle), Throws.Nothing);
     }
 }

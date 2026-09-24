@@ -10,22 +10,22 @@ namespace DivisionEngine.Tests.Serialization;
 [AutoSerialization]
 public sealed partial class IntHolder : SerializableObject
 {
-    [Serialize(10)] public int Value;
     [Serialize(20)] public int After;
+    [Serialize(10)] public int Value;
 }
 
 [AutoSerialization]
 public sealed partial class FloatHolder : SerializableObject
 {
-    [Serialize(10)] public float Value;
     [Serialize(20)] public int After;
+    [Serialize(10)] public float Value;
 }
 
 [AutoSerialization]
 public sealed partial class StringHolder : SerializableObject
 {
-    [Serialize(10)] public string Value = "";
     [Serialize(20)] public int After;
+    [Serialize(10)] public string Value = "";
 }
 
 /// <summary>

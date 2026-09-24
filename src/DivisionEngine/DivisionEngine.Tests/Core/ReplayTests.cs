@@ -50,6 +50,7 @@ public sealed class ReplayTests
     private static ulong Hash(Engine engine, Entity shared, Entity[] owns)
     {
         var hash = 14695981039346656037UL;
+
         void Mix(long value)
         {
             hash = (hash ^ (ulong)value) * 1099511628211UL;

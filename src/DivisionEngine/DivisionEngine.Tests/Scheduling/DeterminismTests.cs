@@ -52,8 +52,10 @@ public sealed class DeterminismTests
         {
             foreach (var jitter in new[] { false, true })
             {
-                Assert.That(RunBehaviorScenario(workers, jitter), Is.EqualTo(reference), $"workers={workers} jitter={jitter}");
-                Assert.That(RunBehaviorScenario(workers, jitter), Is.EqualTo(reference), $"workers={workers} jitter={jitter} (repeat)");
+                Assert.That(RunBehaviorScenario(workers, jitter), Is.EqualTo(reference),
+                    $"workers={workers} jitter={jitter}");
+                Assert.That(RunBehaviorScenario(workers, jitter), Is.EqualTo(reference),
+                    $"workers={workers} jitter={jitter} (repeat)");
             }
         }
     }
@@ -72,8 +74,10 @@ public sealed class DeterminismTests
         {
             foreach (var jitter in new[] { false, true })
             {
-                Assert.That(RunHierarchyScenario(workers, jitter), Is.EqualTo(reference), $"workers={workers} jitter={jitter}");
-                Assert.That(RunHierarchyScenario(workers, jitter), Is.EqualTo(reference), $"workers={workers} jitter={jitter} (repeat)");
+                Assert.That(RunHierarchyScenario(workers, jitter), Is.EqualTo(reference),
+                    $"workers={workers} jitter={jitter}");
+                Assert.That(RunHierarchyScenario(workers, jitter), Is.EqualTo(reference),
+                    $"workers={workers} jitter={jitter} (repeat)");
             }
         }
     }
@@ -168,7 +172,7 @@ public sealed class DeterminismTests
         {
             var delta = (float)context.Time.Delta;
             context.Graph.ScheduleChunks("Spin", query, Access.Write<LocalTransform>(),
-                (in JobContext _, ArchetypeChunk chunk) =>
+                (in _, chunk) =>
                 {
                     Jitter(jitter);
                     var step = Quaternion.CreateFromAxisAngle(Vector3.UnitY, delta);
@@ -191,13 +195,15 @@ public sealed class DeterminismTests
             for (var i = 0; i < entities.Length; i++)
             {
                 var parent = world.GetParent(entities[i]);
-                rows.Add((entities[i].Index, entities[i].Version, transforms[i].Position, parent.IsNull ? -1 : parent.Index));
+                rows.Add((entities[i].Index, entities[i].Version, transforms[i].Position,
+                    parent.IsNull ? -1 : parent.Index));
             }
         }
 
         rows.Sort((a, b) => a.index.CompareTo(b.index));
 
         var hash = 14695981039346656037UL;
+
         void Mix(long value)
         {
             hash = (hash ^ (ulong)value) * 1099511628211UL;
@@ -328,7 +334,8 @@ public sealed class DeterminismTests
         var rng = new Random(seed);
         for (var i = 0; i < InitialEntities; i++)
         {
-            var e = world.CreateEntity(ComponentType<Position>.Id, ComponentType<Velocity>.Id, ComponentType<Health>.Id);
+            var e = world.CreateEntity(ComponentType<Position>.Id, ComponentType<Velocity>.Id,
+                ComponentType<Health>.Id);
             world.SetComponent(e, new Position(rng.NextSingle() * 100, rng.NextSingle() * 100, 0));
             world.SetComponent(e, new Velocity(rng.NextSingle() * 10 - 5, rng.NextSingle() * 10 - 5, 0));
             world.SetComponent(e, new Health { Value = rng.Next(1, 60) });
@@ -454,6 +461,7 @@ public sealed class DeterminismTests
         rows.Sort((a, b) => a.index.CompareTo(b.index));
 
         var hash = 14695981039346656037UL;
+
         void Mix(long value)
         {
             hash = (hash ^ (ulong)value) * 1099511628211UL;

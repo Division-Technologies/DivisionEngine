@@ -3,7 +3,10 @@ using System.Runtime.InteropServices;
 
 namespace DivisionEngine;
 
-/// <summary>Which archetypes a query matches: all of <see cref="All" />, none of <see cref="None" />, and (if non-empty) at least one of <see cref="Any" />.</summary>
+/// <summary>
+///     Which archetypes a query matches: all of <see cref="All" />, none of <see cref="None" />, and (if non-empty)
+///     at least one of <see cref="Any" />.
+/// </summary>
 public readonly struct QueryDescription : IEquatable<QueryDescription>
 {
     internal QueryDescription(
@@ -104,11 +107,15 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
 
     public override int GetHashCode()
     {
-        return HashCode.Combine(ArchetypeKey.Hash(All.AsSpan()), ArchetypeKey.Hash(Any.AsSpan()), ArchetypeKey.Hash(None.AsSpan()));
+        return HashCode.Combine(ArchetypeKey.Hash(All.AsSpan()), ArchetypeKey.Hash(Any.AsSpan()),
+            ArchetypeKey.Hash(None.AsSpan()));
     }
 }
 
-/// <summary>Fluent builder for <see cref="EntityQuery" />; <see cref="Build" /> returns the world's cached query for the description.</summary>
+/// <summary>
+///     Fluent builder for <see cref="EntityQuery" />; <see cref="Build" /> returns the world's cached query for the
+///     description.
+/// </summary>
 public struct QueryBuilder
 {
     private readonly World _world;
@@ -151,7 +158,7 @@ public struct QueryBuilder
             return [];
         }
 
-        return [..types.Distinct().OrderBy(t => t.Value)];
+        return [.. types.Distinct().OrderBy(t => t.Value)];
     }
 }
 
@@ -280,7 +287,8 @@ public sealed class EntityQuery
         {
             if (_world.StructuralVersion != _structuralVersion)
             {
-                throw new InvalidOperationException("The world was structurally changed while a query was being enumerated.");
+                throw new InvalidOperationException(
+                    "The world was structurally changed while a query was being enumerated.");
             }
 
             while (_archetypeIndex < _archetypes.Count)
@@ -361,7 +369,7 @@ public readonly struct ArchetypeChunk
             throw new ArgumentException($"{info.Type} is not a managed component.");
         }
 
-        return (T[])(object)_chunk.GetManagedArray(SlotOfRequired(info));
+        return (T[])_chunk.GetManagedArray(SlotOfRequired(info));
     }
 
     private int SlotOf(ComponentTypeInfo info)

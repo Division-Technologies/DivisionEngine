@@ -32,8 +32,8 @@ public readonly struct BehaviorTask
 internal sealed class BehaviorRun
 {
     public StateMachineBox? Box;
-    public volatile bool IsCompleted;
     public Exception? Exception;
+    public volatile bool IsCompleted;
 
     public void SetCompleted()
     {
@@ -157,7 +157,8 @@ public struct BehaviorTaskMethodBuilder
         }
     }
 
-    private StateMachineBox GetBox<TStateMachine>(ref TStateMachine stateMachine) where TStateMachine : IAsyncStateMachine
+    private StateMachineBox GetBox<TStateMachine>(ref TStateMachine stateMachine)
+        where TStateMachine : IAsyncStateMachine
     {
         var run = _run ??= new BehaviorRun();
         if (run.Box is { } existing)

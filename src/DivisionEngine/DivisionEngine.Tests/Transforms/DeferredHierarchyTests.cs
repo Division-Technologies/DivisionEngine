@@ -1,5 +1,4 @@
 using System.Numerics;
-using System.Runtime.CompilerServices;
 
 namespace DivisionEngine.Tests.Transforms;
 
@@ -151,8 +150,8 @@ public sealed class DeferredHierarchyTests
         {
             if (Interlocked.Exchange(ref _registered, 1) == 0)
             {
-                ComponentTypeRegistry.RegisterEntityFields<RegisteredReference>(
-                    static (ref RegisteredReference value, EntityRemap map) => value.Target = map.Resolve(value.Target));
+                ComponentTypeRegistry.RegisterEntityFields(static (ref RegisteredReference value, EntityRemap map) =>
+                    value.Target = map.Resolve(value.Target));
             }
         }
     }

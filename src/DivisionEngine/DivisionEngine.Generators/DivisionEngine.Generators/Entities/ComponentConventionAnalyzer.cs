@@ -228,7 +228,7 @@ public sealed class ComponentConventionAnalyzer : DiagnosticAnalyzer
 
     private static bool IsGeneric(INamedTypeSymbol symbol)
     {
-        for (INamedTypeSymbol? t = symbol; t != null; t = t.ContainingType)
+        for (var t = symbol; t != null; t = t.ContainingType)
         {
             if (t.Arity > 0)
             {

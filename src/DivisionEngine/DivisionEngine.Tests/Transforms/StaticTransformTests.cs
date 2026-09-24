@@ -11,9 +11,6 @@ namespace DivisionEngine.Tests.Transforms;
 [TestFixture]
 public sealed class StaticTransformTests
 {
-    private Engine _engine = null!;
-    private World _world = null!;
-
     [SetUp]
     public void SetUp()
     {
@@ -26,6 +23,9 @@ public sealed class StaticTransformTests
     {
         _engine.Dispose();
     }
+
+    private Engine _engine = null!;
+    private World _world = null!;
 
     private Vector3 WorldPositionOf(Entity entity)
     {

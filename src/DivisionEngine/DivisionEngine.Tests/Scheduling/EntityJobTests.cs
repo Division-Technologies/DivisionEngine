@@ -59,8 +59,6 @@ public partial struct IntegrateActive
 [TestFixture]
 public sealed class EntityJobTests
 {
-    private Engine _engine = null!;
-
     [SetUp]
     public void SetUp()
     {
@@ -72,6 +70,8 @@ public sealed class EntityJobTests
     {
         _engine.Dispose();
     }
+
+    private Engine _engine = null!;
 
     private Entity Moving(float x, float vx)
     {

@@ -12,7 +12,8 @@ public sealed class AccessSetTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(access.Reads.ToArray(), Is.EqualTo(new[] { ResourceId.Structure, ResourceId.Component<Position>() }));
+            Assert.That(access.Reads.ToArray(),
+                Is.EqualTo(new[] { ResourceId.Structure, ResourceId.Component<Position>() }));
             Assert.That(access.Writes.ToArray(), Is.EqualTo(new[] { ResourceId.Component<Velocity>() }));
             Assert.That(access.CanRead(ResourceId.Component<Velocity>()), Is.True, "writes imply reads");
             Assert.That(access.CanWrite(ResourceId.Component<Position>()), Is.False);

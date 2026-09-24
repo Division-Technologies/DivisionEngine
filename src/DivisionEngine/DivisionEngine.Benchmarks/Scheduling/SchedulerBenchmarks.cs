@@ -12,13 +12,13 @@ public class SchedulerBenchmarks
 {
     private const int N = 100_000;
 
+    [ParamsSource(nameof(WorkerCounts))] public int Workers;
+
     private AccessSet[] _accessSets = [];
     private JobGraph _graph = null!;
     private EntityQuery _query = null!;
     private JobScheduler _scheduler = null!;
     private World _world = null!;
-
-    [ParamsSource(nameof(WorkerCounts))] public int Workers;
 
     public static IEnumerable<int> WorkerCounts => [0, Math.Max(1, Environment.ProcessorCount - 1)];
 
@@ -91,7 +91,9 @@ public class SchedulerBenchmarks
     {
         for (var pass = 0; pass < 4; pass++)
         {
-            var access = pass % 2 == 0 ? Access.Read<Velocity>().Write<Position>() : Access.Read<Position>().Write<Velocity>();
+            var access = pass % 2 == 0
+                ? Access.Read<Velocity>().Write<Position>()
+                : Access.Read<Position>().Write<Velocity>();
             _graph.ScheduleChunks("pass", _query, access, static (in ctx, chunk) =>
             {
                 var positions = chunk.GetSpan<Position>();

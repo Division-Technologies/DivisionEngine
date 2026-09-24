@@ -38,8 +38,10 @@ public sealed class QueryTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(world.Query().With<Position>().Without<Velocity>().Build().CalculateEntityCount(), Is.EqualTo(2));
-            Assert.That(world.Query().WithAny<Velocity>().WithAny<Frozen>().Build().CalculateEntityCount(), Is.EqualTo(2));
+            Assert.That(world.Query().With<Position>().Without<Velocity>().Build().CalculateEntityCount(),
+                Is.EqualTo(2));
+            Assert.That(world.Query().WithAny<Velocity>().WithAny<Frozen>().Build().CalculateEntityCount(),
+                Is.EqualTo(2));
             Assert.That(world.Query().With<Position>().WithAny<Health>().Build().CalculateEntityCount(), Is.Zero);
         });
     }

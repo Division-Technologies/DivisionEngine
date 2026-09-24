@@ -143,7 +143,8 @@ public sealed class PropagationSplitTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(world.GetComponentReadOnly<WorldTransform>(children[0]).Position.X, Is.EqualTo(1f).Within(1e-3f));
+            Assert.That(world.GetComponentReadOnly<WorldTransform>(children[0]).Position.X,
+                Is.EqualTo(1f).Within(1e-3f));
             Assert.That(world.GetComponentReadOnly<WorldTransform>(children[Wide - 1]).Position.X,
                 Is.EqualTo(1f + Wide - 1).Within(1e-3f));
         });

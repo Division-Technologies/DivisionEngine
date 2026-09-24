@@ -56,7 +56,8 @@ public sealed class ComponentTests
             Assert.That(() => world.SetComponent(e, new Velocity()), Throws.InvalidOperationException, "missing set");
             Assert.That(() => world.AddManagedComponent(e, new Name()), Throws.Nothing);
             Assert.That(() => world.GetComponent<Frozen>(e), Throws.InvalidOperationException, "tag has no data");
-            Assert.That(() => world.AddComponent(e, ComponentType<Position>.Id, new byte[3]), Throws.ArgumentException, "wrong size");
+            Assert.That(() => world.AddComponent(e, ComponentType<Position>.Id, new byte[3]), Throws.ArgumentException,
+                "wrong size");
         });
     }
 
@@ -99,8 +100,10 @@ public sealed class ComponentTests
         Assert.Multiple(() =>
         {
             Assert.That(() => world.AddManagedComponent(e, (Name)null!), Throws.ArgumentNullException);
-            Assert.That(() => world.AddManagedComponent(e, ComponentType<Name>.Id, "not a Name"), Throws.ArgumentException);
-            Assert.That(() => world.AddManagedComponent(e, ComponentType<Position>.Id, new Name()), Throws.ArgumentException);
+            Assert.That(() => world.AddManagedComponent(e, ComponentType<Name>.Id, "not a Name"),
+                Throws.ArgumentException);
+            Assert.That(() => world.AddManagedComponent(e, ComponentType<Position>.Id, new Name()),
+                Throws.ArgumentException);
             Assert.That(() => world.SetManagedComponent(e, new Name()), Throws.InvalidOperationException, "missing");
         });
     }

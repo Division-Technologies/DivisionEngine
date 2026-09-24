@@ -14,8 +14,6 @@ namespace DivisionEngine.Tests.Scenes;
 [TestFixture]
 public sealed class WorldReloadTests
 {
-    private string _dir = "";
-
     [SetUp]
     public void SetUp()
     {
@@ -31,6 +29,8 @@ public sealed class WorldReloadTests
             Directory.Delete(_dir, true);
         }
     }
+
+    private string _dir = "";
 
     /// <summary>
     ///     A user component with a hand-written formatter and registration, because the test compiles

@@ -2,7 +2,8 @@ namespace DivisionEngine;
 
 /// <summary>
 ///     Builds the access set of the next segment: <c>await ctx.Access().Read&lt;A&gt;(e1).Write&lt;B&gt;(e2)</c>.
-///     <see cref="At" /> picks the round reads see (default initial), <see cref="To" /> the round writes go to (default main).
+///     <see cref="At" /> picks the round reads see (default initial), <see cref="To" /> the round writes go to (default
+///     main).
 /// </summary>
 public struct EntityAccessBuilder
 {
@@ -71,9 +72,11 @@ public readonly struct EntityAccessAwaiter : IBehaviorAwaiter
         _handle = new EntityAccess(context, access, readRound, writeRound);
 
         // Fail inside the async method (a catchable behavior error) rather than inside the scheduler.
-        if (context.InPhase && access.EntityWrites.Length > 0 && context.Graph.ResolveRound(writeRound) < context.CurrentRound)
+        if (context.InPhase && access.EntityWrites.Length > 0 &&
+            context.Graph.ResolveRound(writeRound) < context.CurrentRound)
         {
-            throw new InvalidOperationException($"{context} cannot write to round '{writeRound}' after advancing past it.");
+            throw new InvalidOperationException(
+                $"{context} cannot write to round '{writeRound}' after advancing past it.");
         }
     }
 
@@ -139,7 +142,8 @@ public readonly struct TryReadAwaitable<T>(BehaviorContext context, Entity targe
     }
 }
 
-public readonly struct TryReadAwaiter<T>(EntityAccessAwaiter inner, Entity target) : IBehaviorAwaiter where T : unmanaged
+public readonly struct TryReadAwaiter<T>(EntityAccessAwaiter inner, Entity target)
+    : IBehaviorAwaiter where T : unmanaged
 {
     public bool IsCompleted => false;
 

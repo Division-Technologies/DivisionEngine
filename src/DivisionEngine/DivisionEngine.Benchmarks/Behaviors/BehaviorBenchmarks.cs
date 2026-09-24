@@ -13,32 +13,13 @@ public class BehaviorBenchmarks
     private const int Behaviors = 1_000;
     private const int SegmentsPerFrame = 4;
 
+    [ParamsSource(nameof(WorkerCounts))] public int Workers;
+
     private JobGraph _graph = null!;
     private JobScheduler _scheduler = null!;
     private World _world = null!;
 
-    [ParamsSource(nameof(WorkerCounts))] public int Workers;
-
     public static IEnumerable<int> WorkerCounts => [0, Math.Max(1, Environment.ProcessorCount - 1)];
-
-    private sealed class Reader(Entity target) : Behavior
-    {
-        public float Sum;
-
-        protected override async BehaviorTask Run(BehaviorContext context)
-        {
-            while (true)
-            {
-                await context.Phase(PhaseId.Update);
-                for (var i = 0; i < SegmentsPerFrame; i++)
-                {
-                    var position = await context.Read<Position>(target);
-                    Sum += position.X;
-                }
-            }
-            // ReSharper disable once FunctionNeverReturns
-        }
-    }
 
     [GlobalSetup]
     public void Setup()
@@ -75,5 +56,24 @@ public class BehaviorBenchmarks
         _graph.BeginPhase(PhaseId.Update);
         _graph.ResumePhase(PhaseId.Update);
         _graph.EndFrame(); // ends the phase (commit) and clears the tracker, as the engine loop does
+    }
+
+    private sealed class Reader(Entity target) : Behavior
+    {
+        public float Sum;
+
+        protected override async BehaviorTask Run(BehaviorContext context)
+        {
+            while (true)
+            {
+                await context.Phase(PhaseId.Update);
+                for (var i = 0; i < SegmentsPerFrame; i++)
+                {
+                    var position = await context.Read<Position>(target);
+                    Sum += position.X;
+                }
+            }
+            // ReSharper disable once FunctionNeverReturns
+        }
     }
 }

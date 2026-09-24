@@ -115,12 +115,12 @@ public sealed class AccessSet
 
     private static bool Contains(ImmutableArray<ResourceId> sorted, ResourceId resource)
     {
-        return ImmutableArray.BinarySearch(sorted, resource, ResourceComparer.Instance) >= 0;
+        return sorted.BinarySearch(resource, ResourceComparer.Instance) >= 0;
     }
 
     private static bool Contains(ImmutableArray<EntityComponentAccess> sorted, EntityComponentAccess access)
     {
-        return ImmutableArray.BinarySearch(sorted, access, EntityAccessComparer.Instance) >= 0;
+        return sorted.BinarySearch(access, EntityAccessComparer.Instance) >= 0;
     }
 
     internal sealed class ResourceComparer : IComparer<ResourceId>
@@ -183,13 +183,15 @@ public struct AccessSetBuilder
 
     public AccessSetBuilder ReadEntity<T>(Entity entity)
     {
-        (_entityReads ??= new List<EntityComponentAccess>()).Add(new EntityComponentAccess(entity, ComponentType<T>.Id));
+        (_entityReads ??= new List<EntityComponentAccess>()).Add(new EntityComponentAccess(entity,
+            ComponentType<T>.Id));
         return this;
     }
 
     public AccessSetBuilder WriteEntity<T>(Entity entity)
     {
-        (_entityWrites ??= new List<EntityComponentAccess>()).Add(new EntityComponentAccess(entity, ComponentType<T>.Id));
+        (_entityWrites ??= new List<EntityComponentAccess>()).Add(
+            new EntityComponentAccess(entity, ComponentType<T>.Id));
         return this;
     }
 
@@ -204,7 +206,7 @@ public struct AccessSetBuilder
         var entityReads = Normalize(_entityReads, AccessSet.EntityAccessComparer.Instance);
 
         var touchesComponents = entityWrites.Length > 0 || entityReads.Length > 0
-                                || ContainsComponent(writes) || ContainsComponent(reads);
+                                                        || ContainsComponent(writes) || ContainsComponent(reads);
         if (touchesComponents
             && Array.IndexOf(writes, ResourceId.Structure) < 0
             && Array.IndexOf(reads, ResourceId.Structure) < 0)

@@ -142,7 +142,10 @@ internal sealed unsafe class Chunk
         }
     }
 
-    /// <summary>Zeroes every component of the entity at <paramref name="index" /> (slots may hold stale data from a previous occupant).</summary>
+    /// <summary>
+    ///     Zeroes every component of the entity at <paramref name="index" /> (slots may hold stale data from a previous
+    ///     occupant).
+    /// </summary>
     public void ClearData(int index)
     {
         var infos = Archetype.Infos.AsSpan();

@@ -18,10 +18,14 @@ namespace DivisionEngine;
 public sealed class JobGraph
 {
     private readonly List<PendingWrite> _carried = new();
+
+    /// <summary>Turns that recorded a structural change in the open phase, played back at its end.</summary>
+    private readonly List<BehaviorContext> _commandRecorders = new();
+
     private readonly List<Deferred> _completedWaiters = new();
     private readonly List<ExternalArrival> _externalArrivals = new();
-    private HashSet<ComponentTypeId>? _frozen;
     private readonly List<Deferred> _intake = new();
+
     /// <summary>
     ///     Serializes issuing. Profiled rather than a plain <see cref="Lock" /> because it is the
     ///     prime suspect for why fine-grained segments run slower with more workers: whether the
@@ -29,23 +33,24 @@ public sealed class JobGraph
     ///     and different in a capture.
     /// </summary>
     private readonly ProfiledLock _issueLock = new("JobGraph issue");
+
     private readonly Dictionary<PhaseId, string[]> _labels = new();
-    private readonly List<List<Parked>> _phaseQueues = new();
-    private readonly ResourceTracker _tracker = new();
 
     /// <summary>Every turn started and not yet cancelled, so they can all be stopped at once.</summary>
     private readonly HashSet<BehaviorContext> _liveTurns = new();
 
-    /// <summary>Turns that recorded a structural change in the open phase, played back at its end.</summary>
-    private readonly List<BehaviorContext> _commandRecorders = new();
+    private readonly List<List<Parked>> _phaseQueues = new();
+    private readonly ResourceTracker _tracker = new();
     private int _closedUpTo = -1;
     private bool _closing;
+    private string[] _currentLabels = [];
     private PhaseId? _currentPhase;
 
     /// <summary>Whether the open phase resumes behaviors, i.e. whether a segment may be running.</summary>
     private bool _currentPhaseDispatches;
-    private string[] _currentLabels = [];
+
     private bool _entryOpen;
+    private HashSet<ComponentTypeId>? _frozen;
     private int _nextTurnId;
     private List<Parked> _pendingResume = [];
     private RoundState[] _rounds = [];
@@ -81,7 +86,10 @@ public sealed class JobGraph
     /// <summary>The phase currently open, if any.</summary>
     public PhaseId? CurrentPhase => _currentPhase;
 
-    /// <summary>Continuations waiting for the next <see cref="BeginPhase" /> (admitted external awaits, deferred segments, starts).</summary>
+    /// <summary>
+    ///     Continuations waiting for the next <see cref="BeginPhase" /> (admitted external awaits, deferred segments,
+    ///     starts).
+    /// </summary>
     public int PendingIntakeCount
     {
         get
@@ -101,6 +109,25 @@ public sealed class JobGraph
             using (_issueLock.EnterScope())
             {
                 return _externalArrivals.Count;
+            }
+        }
+    }
+
+    /// <summary>
+    ///     How many segments one behavior may run per phase before its next segment is deferred to
+    ///     the next phase. Bounds a phase against behaviors that chain data awaits without ever
+    ///     parking; count-based, so deferral is deterministic.
+    /// </summary>
+    public int MaxSegmentsPerPhase { get; set; } = 256;
+
+    /// <summary>Turns started and not yet cancelled.</summary>
+    public int LiveTurnCount
+    {
+        get
+        {
+            using (_issueLock.EnterScope())
+            {
+                return _liveTurns.Count;
             }
         }
     }
@@ -146,7 +173,8 @@ public sealed class JobGraph
         ArgumentNullException.ThrowIfNull(itemCount);
         ArgumentNullException.ThrowIfNull(body);
         ThrowIfFrozen(name, access);
-        return Issue(new TaskNode(Scheduler, name, access, NewContext(), false) { ItemCount = itemCount, RangeBody = body });
+        return Issue(new TaskNode(Scheduler, name, access, NewContext(), false)
+            { ItemCount = itemCount, RangeBody = body });
     }
 
     /// <summary>System-lane writes to a type frozen in the current phase are a configuration error, not something to defer.</summary>
@@ -162,7 +190,8 @@ public sealed class JobGraph
         {
             if (resource.IsComponent && frozen.Contains(resource.ComponentType))
             {
-                throw new InvalidOperationException($"Job '{name}' writes {resource}, which is frozen during phase {_currentPhase}.");
+                throw new InvalidOperationException(
+                    $"Job '{name}' writes {resource}, which is frozen during phase {_currentPhase}.");
             }
         }
     }
@@ -174,7 +203,8 @@ public sealed class JobGraph
     public JobHandle SchedulePlayback(EntityCommandBuffer buffer, string name = "EntityCommandBuffer.Playback")
     {
         ArgumentNullException.ThrowIfNull(buffer);
-        return Schedule(name, Access.WriteStructure().Write(buffer.Resource), context => buffer.Playback(context.World));
+        return Schedule(name, Access.WriteStructure().Write(buffer.Resource),
+            context => buffer.Playback(context.World));
     }
 
     public void Wait(JobHandle handle)
@@ -225,13 +255,6 @@ public sealed class JobGraph
         }
     }
 
-    /// <summary>
-    ///     How many segments one behavior may run per phase before its next segment is deferred to
-    ///     the next phase. Bounds a phase against behaviors that chain data awaits without ever
-    ///     parking; count-based, so deferral is deterministic.
-    /// </summary>
-    public int MaxSegmentsPerPhase { get; set; } = 256;
-
     // ------------------------------------------------------------------- phases
 
     /// <summary>Declares the intermediate rounds of <paramref name="phase" />, in order, between initial and main.</summary>
@@ -262,9 +285,13 @@ public sealed class JobGraph
     ///     continuations collected since the last dispatching phase (admitted external awaits,
     ///     deferred segments, completed-round readers, starts) in turn order.
     /// </summary>
-    /// <param name="dispatchBehaviors">False for phases in which no behavior segment runs (physics, transform propagation, extract).</param>
+    /// <param name="dispatchBehaviors">
+    ///     False for phases in which no behavior segment runs (physics, transform propagation,
+    ///     extract).
+    /// </param>
     /// <param name="frozenTypes">Component types that may not be written during the phase.</param>
-    public void BeginPhase(PhaseId phase, bool dispatchBehaviors = true, IReadOnlyCollection<ComponentTypeId>? frozenTypes = null)
+    public void BeginPhase(PhaseId phase, bool dispatchBehaviors = true,
+        IReadOnlyCollection<ComponentTypeId>? frozenTypes = null)
     {
         List<Deferred> deferred;
         using (_issueLock.EnterScope())
@@ -307,7 +334,8 @@ public sealed class JobGraph
         {
             if (_currentPhase != phase)
             {
-                throw new InvalidOperationException($"Phase {phase} is not open (current: {_currentPhase?.ToString() ?? "none"}).");
+                throw new InvalidOperationException(
+                    $"Phase {phase} is not open (current: {_currentPhase?.ToString() ?? "none"}).");
             }
 
             parked = _pendingResume;
@@ -529,18 +557,6 @@ public sealed class JobGraph
         return context;
     }
 
-    /// <summary>Turns started and not yet cancelled.</summary>
-    public int LiveTurnCount
-    {
-        get
-        {
-            using (_issueLock.EnterScope())
-            {
-                return _liveTurns.Count;
-            }
-        }
-    }
-
     /// <summary>
     ///     Cancels every running turn and drops the continuations waiting to resume them.
     ///     <para>
@@ -588,7 +604,8 @@ public sealed class JobGraph
     ///     Issues the next segment of a behavior with the access it declared at the await.
     ///     <paramref name="waitRound" /> makes the segment wait for that round to close (labelled reads).
     /// </summary>
-    internal void IssueSegment(BehaviorContext context, AccessSet access, Action continuation, EntityAccess? handle, Round? waitRound)
+    internal void IssueSegment(BehaviorContext context, AccessSet access, Action continuation, EntityAccess? handle,
+        Round? waitRound)
     {
         TaskNode node = null!;
         node = new TaskNode(Scheduler, context.Name, access, NewContext(), false)
@@ -701,11 +718,15 @@ public sealed class JobGraph
     {
         using (_issueLock.EnterScope())
         {
-            _externalArrivals.Add(new ExternalArrival(context, new ExternalKey(context.TurnId, sequence), continuation));
+            _externalArrivals.Add(new ExternalArrival(context, new ExternalKey(context.TurnId, sequence),
+                continuation));
         }
     }
 
-    /// <summary>Issues the continuations collected since the last drain, in turn order. Normally done by <see cref="BeginPhase" />.</summary>
+    /// <summary>
+    ///     Issues the continuations collected since the last drain, in turn order. Normally done by
+    ///     <see cref="BeginPhase" />.
+    /// </summary>
     public void DrainIntake()
     {
         List<Deferred> deferred;
@@ -769,7 +790,8 @@ public sealed class JobGraph
     ///     The value of a component as seen by a segment: the in-place value, the closed rounds up to
     ///     <paramref name="readRoundIndex" /> in commit order, then the turn's own pending writes.
     /// </summary>
-    internal void ReadOverlay(BehaviorContext context, Entity entity, ComponentTypeInfo info, int readRoundIndex, Span<byte> destination)
+    internal void ReadOverlay(BehaviorContext context, Entity entity, ComponentTypeInfo info, int readRoundIndex,
+        Span<byte> destination)
     {
         if (readRoundIndex == 0 && context.OwnWrites.Count == 0)
         {
@@ -873,7 +895,8 @@ public sealed class JobGraph
                 var index = Array.IndexOf(_currentLabels, round.LabelName);
                 if (index < 0)
                 {
-                    throw new InvalidOperationException($"Round '{round.LabelName}' is not registered for phase {_currentPhase}.");
+                    throw new InvalidOperationException(
+                        $"Round '{round.LabelName}' is not registered for phase {_currentPhase}.");
                 }
 
                 return index + 1;
@@ -931,7 +954,10 @@ public sealed class JobGraph
         TryCloseRoundsLocked();
     }
 
-    /// <summary>Closes rounds in order while no turn can still write to them. Entry must be closed first, so late starters cannot write to a closed round.</summary>
+    /// <summary>
+    ///     Closes rounds in order while no turn can still write to them. Entry must be closed first, so late starters
+    ///     cannot write to a closed round.
+    /// </summary>
     private void TryCloseRoundsLocked(bool force = false)
     {
         if (_entryOpen && !force)
@@ -1009,7 +1035,12 @@ public sealed class JobGraph
 
     private readonly record struct ExternalArrival(BehaviorContext Context, ExternalKey Key, Action Continuation);
 
-    private readonly record struct Deferred(BehaviorContext Context, AccessSet Access, Action Continuation, EntityAccess? Handle, Round? WaitRound);
+    private readonly record struct Deferred(
+        BehaviorContext Context,
+        AccessSet Access,
+        Action Continuation,
+        EntityAccess? Handle,
+        Round? WaitRound);
 
     /// <summary>Buffered writes of one round of the open phase, plus the turn count that can still write to it.</summary>
     private sealed class RoundState(TaskNode gate)

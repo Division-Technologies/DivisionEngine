@@ -42,11 +42,11 @@ internal sealed class TaskNode
 
     private readonly Lock _lock = new();
     private readonly JobScheduler _scheduler;
-    private List<Chunk>? _chunks;
     private int _batchSize;
-    private int _itemCount;
+    private List<Chunk>? _chunks;
     private volatile bool _completed;
     private volatile bool _hasWaiter;
+    private int _itemCount;
     private int _pendingDependencies = 1; // issue latch: released once all dependencies are registered
     private int _pendingWork;
     private List<TaskNode>? _successors;
@@ -68,17 +68,6 @@ internal sealed class TaskNode
     /// <summary>False for gates: nodes that never run and are completed by hand, so waits must not count them.</summary>
     public bool CountsAsLive { get; private init; } = true;
 
-    /// <summary>A node with no body that others can depend on; it completes when <see cref="Open" /> is called.</summary>
-    internal static TaskNode CreateGate(JobScheduler scheduler, string name)
-    {
-        return new TaskNode(scheduler, name, AccessSet.None, default, false) { CountsAsLive = false };
-    }
-
-    internal void Open()
-    {
-        Complete();
-    }
-
     public Action<JobContext>? Body { get; init; }
     public ChunkJob? ChunkBody { get; init; }
     public EntityQuery? Query { get; init; }
@@ -93,6 +82,17 @@ internal sealed class TaskNode
     public bool IsCompleted => _completed;
 
     public Exception? Error { get; private set; }
+
+    /// <summary>A node with no body that others can depend on; it completes when <see cref="Open" /> is called.</summary>
+    internal static TaskNode CreateGate(JobScheduler scheduler, string name)
+    {
+        return new TaskNode(scheduler, name, AccessSet.None, default, false) { CountsAsLive = false };
+    }
+
+    internal void Open()
+    {
+        Complete();
+    }
 
     /// <summary>Registers <paramref name="predecessor" /> as a dependency unless it has already completed.</summary>
     public void DependOn(TaskNode predecessor)

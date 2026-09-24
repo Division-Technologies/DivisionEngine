@@ -28,7 +28,7 @@ namespace DivisionEngine;
 ///             private void Execute(ref Position position, in Velocity velocity)
 ///                 =&gt; position.X += velocity.X * Delta;
 ///         }
-///
+/// 
 ///         // in a system:
 ///         new Integrate { Delta = (float)context.Time.Delta }.Schedule(context);
 ///         </code>

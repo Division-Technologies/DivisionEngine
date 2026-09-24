@@ -5,10 +5,6 @@ namespace DivisionEngine.Tests.Behaviors;
 [TestFixture]
 public sealed class RoundTests
 {
-    private JobGraph _graph = null!;
-    private JobScheduler _scheduler = null!;
-    private World _world = null!;
-
     [SetUp]
     public void SetUp()
     {
@@ -25,6 +21,10 @@ public sealed class RoundTests
         _scheduler.Dispose();
         _world.Dispose();
     }
+
+    private JobGraph _graph = null!;
+    private JobScheduler _scheduler = null!;
+    private World _world = null!;
 
     private void Frame()
     {
@@ -166,7 +166,8 @@ public sealed class RoundTests
         {
             Assert.That(seenByHealer, Is.EqualTo(90), "reads the damage round after it closed");
             Assert.That(seenInitial, Is.EqualTo(100), "initial never sees behavior writes");
-            Assert.That(_world.GetComponent<Health>(target).Value, Is.EqualTo(95), "damage then main, committed in order");
+            Assert.That(_world.GetComponent<Health>(target).Value, Is.EqualTo(95),
+                "damage then main, committed in order");
         });
     }
 

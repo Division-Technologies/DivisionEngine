@@ -7,8 +7,14 @@ namespace DivisionEngine;
 ///     committed at the end of the phase in round order, then in (turn, sequence) order; reads
 ///     name the round whose result they want.
 ///     <list type="bullet">
-///         <item><see cref="Initial" />: the state after the phase's systems ran and before any behavior commit. Never waits.</item>
-///         <item><see cref="Label" />: a user-registered intermediate round; reading it waits until no turn can still write to it.</item>
+///         <item>
+///             <see cref="Initial" />: the state after the phase's systems ran and before any behavior commit. Never
+///             waits.
+///         </item>
+///         <item>
+///             <see cref="Label" />: a user-registered intermediate round; reading it waits until no turn can still
+///             write to it.
+///         </item>
 ///         <item><see cref="Main" />: the default round for writes.</item>
 ///         <item><see cref="Completed" />: after every commit of the phase; equivalent to the next phase's initial.</item>
 ///     </list>
@@ -91,7 +97,8 @@ internal sealed class PendingWrite
         return byTurn != 0 ? byTurn : a.Sequence.CompareTo(b.Sequence);
     }
 
-    public static PendingWrite ForValue(int turnId, int sequence, Entity entity, ComponentTypeInfo info, int round, byte[] initial)
+    public static PendingWrite ForValue(int turnId, int sequence, Entity entity, ComponentTypeInfo info, int round,
+        byte[] initial)
     {
         var buffer = initial;
         return new PendingWrite
@@ -106,7 +113,8 @@ internal sealed class PendingWrite
         };
     }
 
-    public static PendingWrite ForModify<T>(int turnId, int sequence, Entity entity, int round, Func<T, T> modify) where T : unmanaged
+    public static PendingWrite ForModify<T>(int turnId, int sequence, Entity entity, int round, Func<T, T> modify)
+        where T : unmanaged
     {
         return new PendingWrite
         {

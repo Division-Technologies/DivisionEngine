@@ -45,7 +45,8 @@ public static class JobSafety
         var current = _current;
         if (current is not null && !current.CanRead(resource))
         {
-            throw new JobAccessViolationException($"Job '{_currentName}' reads {resource} but declared only {current}.");
+            throw new JobAccessViolationException(
+                $"Job '{_currentName}' reads {resource} but declared only {current}.");
         }
     }
 
@@ -59,7 +60,8 @@ public static class JobSafety
         var current = _current;
         if (current is not null && !current.CanWrite(resource))
         {
-            throw new JobAccessViolationException($"Job '{_currentName}' writes {resource} but declared only {current}.");
+            throw new JobAccessViolationException(
+                $"Job '{_currentName}' writes {resource} but declared only {current}.");
         }
     }
 }

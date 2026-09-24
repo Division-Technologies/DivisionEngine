@@ -21,7 +21,10 @@ public readonly record struct ExternalKey(int TurnId, int Sequence) : IComparabl
     }
 }
 
-/// <summary>Everything the engine observed from outside during one frame: the clock sample and the external completions admitted.</summary>
+/// <summary>
+///     Everything the engine observed from outside during one frame: the clock sample and the external completions
+///     admitted.
+/// </summary>
 public sealed class FrameRecord
 {
     public FrameRecord(Realtime realtime, ImmutableArray<ExternalKey> externals)

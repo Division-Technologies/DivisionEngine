@@ -15,24 +15,24 @@ public class TransformBenchmarks
 {
     private const int N = 100_000;
 
-    private JobGraph _flatGraph = null!;
-    private JobScheduler _flatScheduler = null!;
-    private World _flatWorld = null!;
-
-    private TransformPropagationSystem _flatSystem = null!;
-    private TransformPropagationSystem _treeSystem = null!;
-
-    private JobGraph _treeGraph = null!;
-    private JobScheduler _treeScheduler = null!;
-    private World _treeWorld = null!;
-
-    [ParamsSource(nameof(WorkerCounts))] public int Workers;
-
     /// <summary>Children per node; 4 puts a tree of 100k entities about eight levels deep.</summary>
     [Params(4)] public int Branching;
 
     /// <summary>How many top-level trees the 100k entities are spread over.</summary>
     [Params(1, 1_000)] public int Roots;
+
+    [ParamsSource(nameof(WorkerCounts))] public int Workers;
+
+    private JobGraph _flatGraph = null!;
+    private JobScheduler _flatScheduler = null!;
+
+    private TransformPropagationSystem _flatSystem = null!;
+    private World _flatWorld = null!;
+
+    private JobGraph _treeGraph = null!;
+    private JobScheduler _treeScheduler = null!;
+    private TransformPropagationSystem _treeSystem = null!;
+    private World _treeWorld = null!;
 
     public static IEnumerable<int> WorkerCounts => [0, Math.Max(1, Environment.ProcessorCount - 1)];
 

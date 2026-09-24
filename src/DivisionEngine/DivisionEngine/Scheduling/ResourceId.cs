@@ -19,6 +19,14 @@ public readonly record struct ResourceId(int Value)
     /// <summary>Entity existence and archetype membership. Writing it conflicts with every other access.</summary>
     public static readonly ResourceId Structure = new(0);
 
+    public bool IsStructure => Value == 0;
+
+    public bool IsComponent => Value > 0;
+
+    public bool IsNamed => Value < 0;
+
+    public ComponentTypeId ComponentType => new(Value - 1);
+
     public static ResourceId Component(ComponentTypeId type)
     {
         return new ResourceId(type.Value + 1);
@@ -52,14 +60,6 @@ public readonly record struct ResourceId(int Value)
         NamedNames[id] = $"{debugName}#{-id}";
         return new ResourceId(id);
     }
-
-    public bool IsStructure => Value == 0;
-
-    public bool IsComponent => Value > 0;
-
-    public bool IsNamed => Value < 0;
-
-    public ComponentTypeId ComponentType => new(Value - 1);
 
     public override string ToString()
     {

@@ -128,7 +128,8 @@ public sealed class TransformPropagationTests
         world.ClearParent(child);
         Propagate(engine, 0.01);
 
-        AssertPosition(WorldPosition(world, child), new Vector3(1, 0, 0), "the local transform is preserved, not the world one");
+        AssertPosition(WorldPosition(world, child), new Vector3(1, 0, 0),
+            "the local transform is preserved, not the world one");
     }
 
     [Test]
@@ -144,7 +145,8 @@ public sealed class TransformPropagationTests
 
         Propagate(engine);
 
-        AssertPosition(WorldPosition(world, child), new Vector3(11, 0, 0), "placed relative to the nearest transform ancestor");
+        AssertPosition(WorldPosition(world, child), new Vector3(11, 0, 0),
+            "placed relative to the nearest transform ancestor");
     }
 
     [Test]
@@ -198,7 +200,8 @@ public sealed class TransformPropagationTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(engine.Loop.TransformPropagation.FrozenTypes, Does.Not.Contain(ComponentType<WorldTransform>.Id));
+            Assert.That(engine.Loop.TransformPropagation.FrozenTypes,
+                Does.Not.Contain(ComponentType<WorldTransform>.Id));
             Assert.That(engine.Loop.LateUpdate.FrozenTypes, Contains.Item(ComponentType<WorldTransform>.Id));
             Assert.That(engine.Loop.Extract.FrozenTypes, Contains.Item(ComponentType<WorldTransform>.Id));
             Assert.That(engine.Loop.Render.FrozenTypes, Contains.Item(ComponentType<WorldTransform>.Id));
@@ -210,7 +213,7 @@ public sealed class TransformPropagationTests
         public void Schedule(in JobSchedulingContext context)
         {
             context.Graph.ScheduleChunks("write LocalTransform", query, Access.Write<LocalTransform>(),
-                static (in JobContext _, ArchetypeChunk chunk) =>
+                static (in _, chunk) =>
                 {
                     foreach (ref var local in chunk.GetSpan<LocalTransform>())
                     {

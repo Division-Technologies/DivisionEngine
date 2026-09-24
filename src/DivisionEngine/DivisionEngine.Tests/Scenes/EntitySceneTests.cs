@@ -17,8 +17,6 @@ public struct SceneTag;
 [TestFixture]
 public sealed class EntitySceneTests
 {
-    private World _world = null!;
-
     [SetUp]
     public void SetUp()
     {
@@ -30,6 +28,8 @@ public sealed class EntitySceneTests
     {
         _world.Dispose();
     }
+
+    private World _world = null!;
 
     /// <summary>Writes the scene as an object document and reads it back, as an asset file would.</summary>
     private static EntityScene RoundTrip(EntityScene scene)

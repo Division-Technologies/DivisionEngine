@@ -11,11 +11,13 @@ public sealed class FrameLoop : SystemGroup
 {
     private readonly Dictionary<PhaseId, PhaseGroup> _phases = new();
 
-    public FrameLoop(double fixedDeltaTime = 0.02, int maxFixedStepsPerFrame = FixedUpdateTimeProvider.DefaultMaxStepsPerFrame)
+    public FrameLoop(double fixedDeltaTime = 0.02,
+        int maxFixedStepsPerFrame = FixedUpdateTimeProvider.DefaultMaxStepsPerFrame)
     {
         FrameBegin = AddPhase(new PhaseGroup(PhaseId.FrameBegin, false, true));
 
-        FixedLoop = new TimeSteppedGroup<FixedUpdateTimeProvider>(new FixedUpdateTimeProvider(fixedDeltaTime, maxFixedStepsPerFrame));
+        FixedLoop = new TimeSteppedGroup<FixedUpdateTimeProvider>(
+            new FixedUpdateTimeProvider(fixedDeltaTime, maxFixedStepsPerFrame));
         FixedPre = AddPhase(new PhaseGroup(PhaseId.FixedPre, false), FixedLoop);
         FixedUpdate = AddPhase(new PhaseGroup(PhaseId.FixedUpdate, true), FixedLoop);
         Physics = AddPhase(new PhaseGroup(PhaseId.Physics, false), FixedLoop);
@@ -60,7 +62,9 @@ public sealed class FrameLoop : SystemGroup
     public IReadOnlyCollection<PhaseGroup> Phases => _phases.Values;
 
     public PhaseGroup this[PhaseId phase] =>
-        _phases.TryGetValue(phase, out var group) ? group : throw new KeyNotFoundException($"Phase {phase} is not part of the frame loop.");
+        _phases.TryGetValue(phase, out var group)
+            ? group
+            : throw new KeyNotFoundException($"Phase {phase} is not part of the frame loop.");
 
     /// <summary>Declares that <paramref name="type" /> may not be written during <paramref name="phases" />.</summary>
     public void Freeze(ComponentTypeId type, params ReadOnlySpan<PhaseId> phases)

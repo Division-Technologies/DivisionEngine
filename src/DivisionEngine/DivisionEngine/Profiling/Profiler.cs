@@ -285,7 +285,8 @@ public static class Profiler
     }
 
     /// <summary>Sets how a plot is drawn. Call once per series, with the name it is emitted with.</summary>
-    public static void ConfigurePlot(in ProfilerName name, PlotFormat format, bool step = false, bool fill = true, uint color = 0)
+    public static void ConfigurePlot(in ProfilerName name, PlotFormat format, bool step = false, bool fill = true,
+        uint color = 0)
     {
 #if DIVISION_PROFILING
         if (IsRunning)

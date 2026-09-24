@@ -86,7 +86,8 @@ public sealed class EntityJobGenerator : IIncrementalGenerator
         {
             foreach (var diagnostic in result.Diagnostics.AsImmutableArray())
             {
-                spc.ReportDiagnostic(Diagnostic.Create(diagnostic.Descriptor, null, diagnostic.Arguments.AsImmutableArray().ToArray()));
+                spc.ReportDiagnostic(Diagnostic.Create(diagnostic.Descriptor, null,
+                    diagnostic.Arguments.AsImmutableArray().ToArray()));
             }
 
             if (result.Info is { } info)
@@ -95,10 +96,6 @@ public sealed class EntityJobGenerator : IIncrementalGenerator
             }
         });
     }
-
-    private readonly record struct PendingDiagnostic(DiagnosticDescriptor Descriptor, EquatableArray<string> Arguments);
-
-    private readonly record struct DescribeResult(EntityJobInfo? Info, EquatableArray<PendingDiagnostic> Diagnostics);
 
     private static DescribeResult Describe(GeneratorAttributeSyntaxContext ctx)
     {
@@ -286,8 +283,10 @@ public sealed class EntityJobGenerator : IIncrementalGenerator
         }
 
         var all = string.Join(", ", queryTypes.Distinct().Select(t => $"global::DivisionEngine.ComponentType<{t}>.Id"));
-        var any = string.Join(", ", info.Any.AsImmutableArray().Select(t => $"global::DivisionEngine.ComponentType<{t}>.Id"));
-        var none = string.Join(", ", info.None.AsImmutableArray().Select(t => $"global::DivisionEngine.ComponentType<{t}>.Id"));
+        var any = string.Join(", ",
+            info.Any.AsImmutableArray().Select(t => $"global::DivisionEngine.ComponentType<{t}>.Id"));
+        var none = string.Join(", ",
+            info.None.AsImmutableArray().Select(t => $"global::DivisionEngine.ComponentType<{t}>.Id"));
 
         // A job that declares no component access still reads the structure it iterates.
         var access = accessCalls.Count > 0
@@ -342,4 +341,8 @@ public sealed class EntityJobGenerator : IIncrementalGenerator
                  }{{info.ContainingClose}}{{namespaceClose}}
                  """;
     }
+
+    private readonly record struct PendingDiagnostic(DiagnosticDescriptor Descriptor, EquatableArray<string> Arguments);
+
+    private readonly record struct DescribeResult(EntityJobInfo? Info, EquatableArray<PendingDiagnostic> Diagnostics);
 }

@@ -27,10 +27,10 @@ public readonly struct JobSchedulingContext
 /// </summary>
 public interface IJobSystem : ISystem
 {
-    void Schedule(in JobSchedulingContext context);
-
     void ISystem.Execute(ref FrameContext ctx)
     {
         Schedule(new JobSchedulingContext(in ctx));
     }
+
+    void Schedule(in JobSchedulingContext context);
 }

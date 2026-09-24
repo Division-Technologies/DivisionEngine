@@ -29,10 +29,50 @@ public sealed class EntityScene : ISerializableObject
 
     private List<EntityRecord> _entities = new();
 
+    public int EntityCount => _entities.Count;
+
     public SerializationScope Scope { get; set; } = null!;
     public LocalId Id { get; set; }
 
-    public int EntityCount => _entities.Count;
+    // ------------------------------------------------------------- serialization
+
+    void ISerializable.Serialize<TSerializer>(ref TSerializer serializer)
+    {
+        // Entity-valued fields resolve through this context while the component formatters run.
+        var context = new EntitySerializationContext();
+        foreach (var record in _entities)
+        {
+            context.Map(EntitySerializationContext.PlaceholderFor(record.Id), record.Id);
+        }
+
+        using var _ = context.Enter();
+
+        serializer.BeginArray(FieldEntities, "entities"u8, _entities.Count);
+        foreach (var record in _entities)
+        {
+            record.Serialize(ref serializer);
+        }
+
+        serializer.EndArray();
+    }
+
+    void ISerializable.Deserialize<TDeserializer>(ref TDeserializer deserializer)
+    {
+        using var _ = EntitySerializationContext.ForLoading().Enter();
+
+        _entities = new List<EntityRecord>();
+        if (!deserializer.TryBeginArray(FieldEntities, "entities"u8, out var count))
+        {
+            return;
+        }
+
+        for (var i = 0; i < count; i++)
+        {
+            _entities.Add(EntityRecord.Deserialize(ref deserializer));
+        }
+
+        deserializer.EndArray();
+    }
 
     // ---------------------------------------------------------------- snapshots
 
@@ -70,17 +110,6 @@ public sealed class EntityScene : ISerializableObject
         var scene = new EntityScene();
         ((ISerializable)scene).Deserialize(ref deserializer);
         return scene;
-    }
-
-    /// <summary>A scene holds no object references today, so nothing should ask to resolve one.</summary>
-    private sealed class NoReferences : ISerializedObjectResolver
-    {
-        public static readonly NoReferences Instance = new();
-
-        public ISerializableObject? Resolve(GlobalId id)
-        {
-            return null;
-        }
     }
 
     // ------------------------------------------------------------------ capture
@@ -277,44 +306,15 @@ public sealed class EntityScene : ISerializableObject
         return type;
     }
 
-    // ------------------------------------------------------------- serialization
-
-    void ISerializable.Serialize<TSerializer>(ref TSerializer serializer)
+    /// <summary>A scene holds no object references today, so nothing should ask to resolve one.</summary>
+    private sealed class NoReferences : ISerializedObjectResolver
     {
-        // Entity-valued fields resolve through this context while the component formatters run.
-        var context = new EntitySerializationContext();
-        foreach (var record in _entities)
+        public static readonly NoReferences Instance = new();
+
+        public ISerializableObject? Resolve(GlobalId id)
         {
-            context.Map(EntitySerializationContext.PlaceholderFor(record.Id), record.Id);
+            return null;
         }
-
-        using var _ = context.Enter();
-
-        serializer.BeginArray(FieldEntities, "entities"u8, _entities.Count);
-        foreach (var record in _entities)
-        {
-            record.Serialize(ref serializer);
-        }
-
-        serializer.EndArray();
-    }
-
-    void ISerializable.Deserialize<TDeserializer>(ref TDeserializer deserializer)
-    {
-        using var _ = EntitySerializationContext.ForLoading().Enter();
-
-        _entities = new List<EntityRecord>();
-        if (!deserializer.TryBeginArray(FieldEntities, "entities"u8, out var count))
-        {
-            return;
-        }
-
-        for (var i = 0; i < count; i++)
-        {
-            _entities.Add(EntityRecord.Deserialize(ref deserializer));
-        }
-
-        deserializer.EndArray();
     }
 
     private sealed class EntityRecord

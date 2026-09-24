@@ -6,9 +6,6 @@ namespace DivisionEngine.Tests.Core;
 [TestFixture]
 public sealed class FrameLoopTests
 {
-    private Engine _engine = null!;
-    private List<(PhaseId phase, double time)> _log = null!;
-
     [SetUp]
     public void SetUp()
     {
@@ -26,6 +23,9 @@ public sealed class FrameLoopTests
         _engine.Dispose();
     }
 
+    private Engine _engine = null!;
+    private List<(PhaseId phase, double time)> _log = null!;
+
     private static Realtime At(double seconds)
     {
         return Realtime.FromTicks((long)Math.Round(seconds * 1000), 1000);
@@ -37,7 +37,8 @@ public sealed class FrameLoopTests
         PhaseId.Extract, PhaseId.Render, PhaseId.FrameEnd
     ];
 
-    private static readonly PhaseId[] FixedPhases = [PhaseId.FixedPre, PhaseId.FixedUpdate, PhaseId.Physics, PhaseId.FixedPost];
+    private static readonly PhaseId[] FixedPhases =
+        [PhaseId.FixedPre, PhaseId.FixedUpdate, PhaseId.Physics, PhaseId.FixedPost];
 
     private sealed class Probe(PhaseId phase, List<(PhaseId, double)> log) : ISystem
     {
@@ -85,7 +86,8 @@ public sealed class FrameLoopTests
         Assert.Multiple(() =>
         {
             Assert.That(_log.Select(e => e.phase), Is.EqualTo(expected));
-            Assert.That(_log.Where(e => e.phase == PhaseId.Update).Select(e => e.time), Is.EqualTo(new[] { 0.0, 0.01 }).Within(1e-9));
+            Assert.That(_log.Where(e => e.phase == PhaseId.Update).Select(e => e.time),
+                Is.EqualTo(new[] { 0.0, 0.01 }).Within(1e-9));
             Assert.That(_engine.FrameIndex, Is.EqualTo(2));
         });
     }
@@ -105,8 +107,10 @@ public sealed class FrameLoopTests
         Assert.Multiple(() =>
         {
             Assert.That(_log.Select(e => e.phase), Is.EqualTo(expected));
-            Assert.That(_log.Where(e => e.phase == PhaseId.FixedUpdate).Select(e => e.time), Is.EqualTo(new[] { 0.0, 0.02 }).Within(1e-9));
-            Assert.That(_log.Single(e => e.phase == PhaseId.LateUpdate).time, Is.EqualTo(0.05).Within(1e-9), "variable phases use the frame time");
+            Assert.That(_log.Where(e => e.phase == PhaseId.FixedUpdate).Select(e => e.time),
+                Is.EqualTo(new[] { 0.0, 0.02 }).Within(1e-9));
+            Assert.That(_log.Single(e => e.phase == PhaseId.LateUpdate).time, Is.EqualTo(0.05).Within(1e-9),
+                "variable phases use the frame time");
             Assert.That(_engine.Loop.FixedLoop.LastStepCount, Is.EqualTo(2));
         });
     }
@@ -188,7 +192,8 @@ public sealed class FrameLoopTests
         {
             Assert.That(context.Task.IsCompleted, Is.True);
             Assert.That(seenInRender, Is.EqualTo(new[] { 0f }), "not visible while the type is frozen");
-            Assert.That(_engine.World.GetComponent<Position>(target).X, Is.EqualTo(9), "committed by the first allowing phase");
+            Assert.That(_engine.World.GetComponent<Position>(target).X, Is.EqualTo(9),
+                "committed by the first allowing phase");
         });
 
         _engine.RunFrame(At(0.01));
@@ -242,7 +247,8 @@ public sealed class FrameLoopTests
         Assert.Multiple(() =>
         {
             Assert.That(_log.Any(e => FixedPhases.Contains(e.phase)), Is.False);
-            Assert.That(_log.Single(e => e.phase == PhaseId.Update).time, Is.EqualTo(0).Within(1e-9), "frame clock counts from the first frame");
+            Assert.That(_log.Single(e => e.phase == PhaseId.Update).time, Is.EqualTo(0).Within(1e-9),
+                "frame clock counts from the first frame");
         });
     }
 }

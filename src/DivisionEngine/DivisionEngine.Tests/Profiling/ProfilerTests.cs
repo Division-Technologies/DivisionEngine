@@ -8,8 +8,6 @@ namespace DivisionEngine.Tests.Profiling;
 [TestFixture]
 public sealed class ProfilerTests
 {
-    private static readonly ProfilerZoneSource Zone = Profiler.DeclareZone("Test zone");
-
     /// <summary>
     ///     Starts the profiler up front so that the instrumentation test below actually reaches
     ///     the native library. Every entry point is guarded by <see cref="Profiler.IsRunning" />,
@@ -21,6 +19,8 @@ public sealed class ProfilerTests
     {
         Profiler.Startup();
     }
+
+    private static readonly ProfilerZoneSource Zone = Profiler.DeclareZone("Test zone");
 
     /// <summary>
     ///     Nothing here may throw, whether or not profiling is compiled in and whether or not the
@@ -47,7 +47,7 @@ public sealed class ProfilerTests
             Profiler.FrameMarkStart(name);
             Profiler.FrameMarkEnd(name);
             Profiler.FrameMark();
-            Profiler.ConfigurePlot(name, PlotFormat.Memory, step: true);
+            Profiler.ConfigurePlot(name, PlotFormat.Memory, true);
             Profiler.Plot(name, 1.0);
             Profiler.Message("hello");
 

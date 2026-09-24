@@ -3,8 +3,6 @@ namespace DivisionEngine.Tests.Transforms;
 [TestFixture]
 public sealed class HierarchyTests
 {
-    private World _world = null!;
-
     [SetUp]
     public void SetUp()
     {
@@ -16,6 +14,8 @@ public sealed class HierarchyTests
     {
         _world.Dispose();
     }
+
+    private World _world = null!;
 
     private static List<Entity> Children(World world, Entity parent)
     {

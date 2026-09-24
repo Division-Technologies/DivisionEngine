@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace DivisionEngine;
@@ -137,7 +136,8 @@ public sealed class EntityCommandBuffer
             bytes[..size].CopyTo(_payload.AsSpan(_payloadLength, size));
         }
 
-        _commands.Add(new Command(kind, entity) { Type = info.Id, PayloadOffset = _payloadLength, PayloadLength = size });
+        _commands.Add(
+            new Command(kind, entity) { Type = info.Id, PayloadOffset = _payloadLength, PayloadLength = size });
         _payloadLength += size;
     }
 

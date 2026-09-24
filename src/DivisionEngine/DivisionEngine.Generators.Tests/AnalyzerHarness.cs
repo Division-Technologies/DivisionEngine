@@ -46,7 +46,8 @@ internal static class AnalyzerHarness
         var errors = compilation.GetDiagnostics()
             .Where(d => d.Severity == DiagnosticSeverity.Error)
             .ToArray();
-        Assert.That(errors, Is.Empty, "the analyzed snippet must compile:\n" + string.Join("\n", errors.AsEnumerable()));
+        Assert.That(errors, Is.Empty,
+            "the analyzed snippet must compile:\n" + string.Join("\n", errors.AsEnumerable()));
 
         var withAnalyzers = compilation.WithAnalyzers(ImmutableArray.Create(analyzer));
         return withAnalyzers.GetAnalyzerDiagnosticsAsync().GetAwaiter().GetResult()

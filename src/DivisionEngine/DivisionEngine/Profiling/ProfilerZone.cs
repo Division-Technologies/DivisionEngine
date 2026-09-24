@@ -1,5 +1,7 @@
+#if DIVISION_PROFILING
 using System.Buffers;
 using System.Text;
+#endif
 
 namespace DivisionEngine;
 
@@ -47,7 +49,7 @@ public enum PlotFormat
     Percentage = 2,
 
     /// <summary>Watts.</summary>
-    Watt = 3,
+    Watt = 3
 }
 
 /// <summary>

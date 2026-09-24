@@ -99,12 +99,6 @@ public sealed class BehaviorContext
     /// <summary>This turn's buffered writes in the current phase, for read-your-own-writes.</summary>
     internal List<PendingWrite> OwnWrites { get; } = new();
 
-    /// <summary>Stops the behavior: pending continuations are dropped when they would resume.</summary>
-    public void Cancel()
-    {
-        _cancelled = true;
-    }
-
     /// <summary>
     ///     Records structural changes — creating and destroying entities, adding and removing
     ///     components — to be applied at the end of the current phase.
@@ -128,6 +122,12 @@ public sealed class BehaviorContext
             Graph.OnCommandsRecorded(this);
             return commands;
         }
+    }
+
+    /// <summary>Stops the behavior: pending continuations are dropped when they would resume.</summary>
+    public void Cancel()
+    {
+        _cancelled = true;
     }
 
     /// <summary>Hands the turn's recorded commands to the graph for playback, if it recorded any.</summary>
@@ -177,7 +177,8 @@ public sealed class BehaviorContext
         ArgumentNullException.ThrowIfNull(modify);
         if (Current != this)
         {
-            throw new InvalidOperationException("Modify must be called from inside one of the behavior's own segments.");
+            throw new InvalidOperationException(
+                "Modify must be called from inside one of the behavior's own segments.");
         }
 
         var write = Graph.RecordWrite(this, round ?? Round.Main,
@@ -256,9 +257,9 @@ public sealed class EntityAccess
 {
     private const int MaxStackBytes = 1024;
     private readonly BehaviorContext _context;
-    private Dictionary<(int entity, int type), PendingWrite>? _writes;
-    private volatile bool _active;
     private Exception? _activationError;
+    private volatile bool _active;
+    private Dictionary<(int entity, int type), PendingWrite>? _writes;
 
     internal EntityAccess(BehaviorContext context, AccessSet access, Round readRound, Round writeRound)
     {
@@ -286,7 +287,7 @@ public sealed class EntityAccess
             return MemoryMarshal.Read<T>(pending.Value);
         }
 
-        Span<byte> buffer = info.Size <= MaxStackBytes ? stackalloc byte[info.Size] : new byte[info.Size];
+        var buffer = info.Size <= MaxStackBytes ? stackalloc byte[info.Size] : new byte[info.Size];
         World.CopyComponentUnchecked(entity, info, buffer);
         _context.Graph.ReadOverlay(_context, entity, info, ReadRoundIndex, buffer);
         return MemoryMarshal.Read<T>(buffer);
@@ -344,7 +345,8 @@ public sealed class EntityAccess
             foreach (var declared in Access.EntityWrites)
             {
                 var info = ComponentTypeRegistry.GetInfo(declared.Type);
-                if (info.IsManaged || !World.IsAlive(declared.Entity) || !World.HasComponent(declared.Entity, declared.Type))
+                if (info.IsManaged || !World.IsAlive(declared.Entity) ||
+                    !World.HasComponent(declared.Entity, declared.Type))
                 {
                     continue;
                 }
@@ -353,9 +355,11 @@ public sealed class EntityAccess
                 World.CopyComponentUnchecked(declared.Entity, info, initial);
                 _context.Graph.ReadOverlay(_context, declared.Entity, info, ReadRoundIndex, initial);
                 var write = _context.Graph.RecordWrite(_context, WriteRound,
-                    index => PendingWrite.ForValue(_context.TurnId, _context.NextWriteSequence(), declared.Entity, info, index, initial));
+                    index => PendingWrite.ForValue(_context.TurnId, _context.NextWriteSequence(), declared.Entity, info,
+                        index, initial));
                 _context.OwnWrites.Add(write);
-                (_writes ??= new Dictionary<(int entity, int type), PendingWrite>())[(declared.Entity.Index, declared.Type.Value)] = write;
+                (_writes ??= new Dictionary<(int entity, int type), PendingWrite>())[
+                    (declared.Entity.Index, declared.Type.Value)] = write;
             }
         }
         catch (Exception ex)
@@ -374,7 +378,8 @@ public sealed class EntityAccess
     {
         if (!_active)
         {
-            throw new InvalidOperationException("This access handle belongs to a segment that has already ended; await again to declare access.");
+            throw new InvalidOperationException(
+                "This access handle belongs to a segment that has already ended; await again to declare access.");
         }
 
         if (_activationError is { } error)

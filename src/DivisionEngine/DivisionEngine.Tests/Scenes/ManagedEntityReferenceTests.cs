@@ -6,8 +6,8 @@ namespace DivisionEngine.Tests.Scenes;
 [TypeId("8e3f0a21-64cd-4f79-9b48-31a7c05d2200")]
 public sealed partial class Follower : SerializableObject
 {
-    [Serialize] public Entity Target;
     [Serialize] public float Distance;
+    [Serialize] public Entity Target;
 }
 
 /// <summary>A behavior holding an entity reference, which is a natural thing to write.</summary>

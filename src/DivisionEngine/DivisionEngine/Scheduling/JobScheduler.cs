@@ -12,11 +12,12 @@ public sealed class JobScheduler : IDisposable
 {
     [ThreadStatic] private static int _workerIndex; // 0 = not a pool worker (main or foreign thread)
 
-    private readonly ConcurrentQueue<(TaskNode node, int work)> _mainQueue = new();
     // Idle time is the point of instrumenting the pool: a worker that spends the frame asleep on
     // the semaphore and a worker that spends it running jobs look the same in a wall-clock total.
     private static readonly ProfilerZoneSource IdleZone = Profiler.DeclareZone("Worker idle", ProfilerColors.Idle);
     private static readonly ProfilerZoneSource MainIdleZone = Profiler.DeclareZone("Main idle", ProfilerColors.Idle);
+
+    private readonly ConcurrentQueue<(TaskNode node, int work)> _mainQueue = new();
 
     private readonly SemaphoreSlim _mainWake = new(0);
     private readonly ConcurrentQueue<(TaskNode node, int work)> _queue = new();
@@ -27,7 +28,10 @@ public sealed class JobScheduler : IDisposable
     private int _live;
     private volatile bool _mainWaiting;
 
-    /// <param name="workerCount">Pool threads besides the main thread. 0 runs everything on the main thread (useful as a sequential oracle).</param>
+    /// <param name="workerCount">
+    ///     Pool threads besides the main thread. 0 runs everything on the main thread (useful as a
+    ///     sequential oracle).
+    /// </param>
     public JobScheduler(int workerCount)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(workerCount);
@@ -43,11 +47,6 @@ public sealed class JobScheduler : IDisposable
             };
             _workers[i].Start();
         }
-    }
-
-    public static JobScheduler CreateDefault()
-    {
-        return new JobScheduler(Math.Max(0, Environment.ProcessorCount - 1));
     }
 
     public int WorkerCount => _workers.Length;
@@ -76,6 +75,11 @@ public sealed class JobScheduler : IDisposable
         _signal.Dispose();
         _mainWake.Dispose();
         _shutdown.Dispose();
+    }
+
+    public static JobScheduler CreateDefault()
+    {
+        return new JobScheduler(Math.Max(0, Environment.ProcessorCount - 1));
     }
 
     internal void Register(TaskNode node)
@@ -258,7 +262,9 @@ public sealed class JobScheduler : IDisposable
             errors.Add(error);
         }
 
-        throw errors.Count == 1 ? new JobFailedException(errors[0]) : new JobFailedException(new AggregateException(errors));
+        throw errors.Count == 1
+            ? new JobFailedException(errors[0])
+            : new JobFailedException(new AggregateException(errors));
     }
 }
 

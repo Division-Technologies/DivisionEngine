@@ -137,4 +137,4 @@ public partial struct Sibling
 /// </remarks>
 [Component]
 [TypeId("6f1a2c48-5f6b-4a0e-9a31-0f3d5c7e1b06")]
-public partial struct Static;
+public struct Static;

@@ -1,4 +1,3 @@
-
 namespace DivisionEngine.Tests.Scenes;
 
 /// <summary>A component nothing in the test assembly mentions, to prove the attribute alone registers it.</summary>

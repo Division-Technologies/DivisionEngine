@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using DivisionEngine.Tests.Entities;
 
 namespace DivisionEngine.Tests.Behaviors;
@@ -6,11 +5,6 @@ namespace DivisionEngine.Tests.Behaviors;
 [TestFixture]
 public sealed class BehaviorTests
 {
-    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
-    private JobGraph _graph = null!;
-    private JobScheduler _scheduler = null!;
-    private World _world = null!;
-
     [SetUp]
     public void SetUp()
     {
@@ -26,6 +20,11 @@ public sealed class BehaviorTests
         _scheduler.Dispose();
         _world.Dispose();
     }
+
+    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
+    private JobGraph _graph = null!;
+    private JobScheduler _scheduler = null!;
+    private World _world = null!;
 
     /// <summary>One frame as the loop would run it: intake, the Update phase, close.</summary>
     private void Frame()
@@ -60,8 +59,8 @@ public sealed class BehaviorTests
 
     private sealed class Reader(Entity target) : Behavior
     {
-        public Position Value;
         public bool InSegment;
+        public Position Value;
 
         protected override async BehaviorTask Run(BehaviorContext context)
         {
@@ -97,7 +96,8 @@ public sealed class BehaviorTests
             {
                 await context.Read<Health>(shared);
                 Thread.SpinWait(Random.Shared.Next(0, 2_000));
-                context.Modify<Health>(shared, h => new Health { Value = h.Value + 1 }); // applied in key order at commit
+                context.Modify<Health>(shared,
+                    h => new Health { Value = h.Value + 1 }); // applied in key order at commit
             }
         }
     }
@@ -437,7 +437,8 @@ public sealed class BehaviorTests
         Assert.Multiple(() =>
         {
             Assert.That(counter.Count, Is.EqualTo(10));
-            Assert.That(frames, Is.InRange(2, 4), "4 segments per phase: the chain spans several phases but is never lost");
+            Assert.That(frames, Is.InRange(2, 4),
+                "4 segments per phase: the chain spans several phases but is never lost");
         });
     }
 
@@ -462,7 +463,8 @@ public sealed class BehaviorTests
     public void EngineLoop_ResumesUpdatePhaseOncePerFrame()
     {
         _scheduler.Dispose();
-        using var engine = new Engine(Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, new JobScheduler(2));
+        using var engine = new Engine(Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
+            new JobScheduler(2));
         _scheduler = new JobScheduler(0); // placeholder so TearDown can dispose something
 
         var entity = engine.World.CreateEntity();
@@ -474,6 +476,7 @@ public sealed class BehaviorTests
             engine.RunFrame(Realtime.FromTicks(i, 1000)); // 1 ms apart: no fixed step is owed
         }
 
-        Assert.That(waiter.Resumed, Is.EqualTo(3), "the first frame starts the behavior; each later frame resumes it once");
+        Assert.That(waiter.Resumed, Is.EqualTo(3),
+            "the first frame starts the behavior; each later frame resumes it once");
     }
 }

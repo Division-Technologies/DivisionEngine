@@ -12,7 +12,10 @@ public sealed class RenderWorld
     public long FrameIndex { get; internal set; } = -1;
 }
 
-/// <summary>Extract-phase system that stamps the render world with the current frame. Real extraction comes with the renderer.</summary>
+/// <summary>
+///     Extract-phase system that stamps the render world with the current frame. Real extraction comes with the
+///     renderer.
+/// </summary>
 internal sealed class ExtractFrameSystem : ISystem
 {
     public void Execute(ref FrameContext ctx)

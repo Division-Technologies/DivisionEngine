@@ -13,8 +13,6 @@ namespace DivisionEngine.Tests.Scenes;
 [TestFixture]
 public sealed class SceneAssetTests
 {
-    private string _dir = "";
-
     [SetUp]
     public void SetUp()
     {
@@ -30,6 +28,8 @@ public sealed class SceneAssetTests
             Directory.Delete(_dir, true);
         }
     }
+
+    private string _dir = "";
 
     private string CachePath => Path.Combine(_dir, "cache");
 

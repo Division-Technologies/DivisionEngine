@@ -1,6 +1,3 @@
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
-
 namespace DivisionEngine;
 
 /// <summary>Thrown when an operation targets an entity handle that is null, stale, or deferred.</summary>
@@ -21,16 +18,18 @@ public sealed class World : IDisposable
 {
     private const int MaxStackTypes = 64;
 
-    private readonly Dictionary<ArchetypeKey, Archetype>.AlternateLookup<ReadOnlySpan<ComponentTypeId>> _archetypeLookup;
+    private readonly Dictionary<ArchetypeKey, Archetype>.AlternateLookup<ReadOnlySpan<ComponentTypeId>>
+        _archetypeLookup;
+
     private readonly List<Archetype> _archetypes = new();
     private readonly Dictionary<ArchetypeKey, Archetype> _archetypesByKey = new(ArchetypeKey.Comparer.Instance);
     private readonly Stack<int> _freeIndices = new();
     private readonly Dictionary<QueryDescription, EntityQuery> _queries = new();
     private readonly List<IStructuralHook> _structuralHooks = new();
-    private Archetype _rootArchetype;
     private bool _disposed;
     private EntityLocation[] _locations = new EntityLocation[256];
     private int _nextIndex;
+    private Archetype _rootArchetype;
     private int[] _versions = new int[256];
 
     public World()
@@ -45,6 +44,10 @@ public sealed class World : IDisposable
 
     /// <summary>Incremented on every structural change; used to detect changes during iteration.</summary>
     public int StructuralVersion { get; private set; }
+
+    // ----------------------------------------------------------------- hooks
+
+    public IReadOnlyList<IStructuralHook> StructuralHooks => _structuralHooks;
 
     public void Dispose()
     {
@@ -195,10 +198,6 @@ public sealed class World : IDisposable
         return GetLocation(entity).Chunk!.Archetype;
     }
 
-    // ----------------------------------------------------------------- hooks
-
-    public IReadOnlyList<IStructuralHook> StructuralHooks => _structuralHooks;
-
     /// <summary>
     ///     Registers a hook that maintains cross-entity invariants across structural changes.
     ///     Registering the same hook twice is a no-op, so features can call this lazily when first
@@ -243,7 +242,10 @@ public sealed class World : IDisposable
         }
     }
 
-    /// <summary>Non-generic form of <see cref="AddComponent{T}" />; <paramref name="value" /> must be exactly the component's size.</summary>
+    /// <summary>
+    ///     Non-generic form of <see cref="AddComponent{T}" />; <paramref name="value" /> must be exactly the component's
+    ///     size.
+    /// </summary>
     public void AddComponent(Entity entity, ComponentTypeId type, ReadOnlySpan<byte> value)
     {
         var info = ComponentTypeRegistry.GetInfo(type);
@@ -259,7 +261,10 @@ public sealed class World : IDisposable
         GetComponent<T>(entity) = value;
     }
 
-    /// <summary>Copies an unmanaged component's bytes out; <paramref name="destination" /> must be exactly the component's size.</summary>
+    /// <summary>
+    ///     Copies an unmanaged component's bytes out; <paramref name="destination" /> must be exactly the component's
+    ///     size.
+    /// </summary>
     public void CopyComponent(Entity entity, ComponentTypeId type, Span<byte> destination)
     {
         var info = ComponentTypeRegistry.GetInfo(type);
@@ -272,14 +277,15 @@ public sealed class World : IDisposable
     }
 
     /// <summary>Component bytes without the type-level safety check; callers have verified entity-level access.</summary>
-    internal unsafe void CopyComponentUnchecked(Entity entity, ComponentTypeInfo info, Span<byte> destination)
+    internal void CopyComponentUnchecked(Entity entity, ComponentTypeInfo info, Span<byte> destination)
     {
         ref var location = ref GetLocation(entity);
         ThrowIfMissing(location, info);
         CopyComponentUnchecked(location, info, destination);
     }
 
-    private static unsafe void CopyComponentUnchecked(in EntityLocation location, ComponentTypeInfo info, Span<byte> destination)
+    private static unsafe void CopyComponentUnchecked(in EntityLocation location, ComponentTypeInfo info,
+        Span<byte> destination)
     {
         if (info.Size == 0)
         {
@@ -287,7 +293,8 @@ public sealed class World : IDisposable
         }
 
         var chunk = location.Chunk!;
-        new ReadOnlySpan<byte>(chunk.GetPointer(chunk.Archetype.SlotOf(info.Id), location.Index), info.Size).CopyTo(destination);
+        new ReadOnlySpan<byte>(chunk.GetPointer(chunk.Archetype.SlotOf(info.Id), location.Index), info.Size)
+            .CopyTo(destination);
     }
 
     public void SetComponent(Entity entity, ComponentTypeId type, ReadOnlySpan<byte> value)
@@ -355,7 +362,8 @@ public sealed class World : IDisposable
         var source = location.Chunk!.Archetype;
         if (!source.Has(type))
         {
-            throw new InvalidOperationException($"{entity} has no {ComponentTypeRegistry.GetInfo(type).Type} component.");
+            throw new InvalidOperationException(
+                $"{entity} has no {ComponentTypeRegistry.GetInfo(type).Type} component.");
         }
 
         MoveEntity(entity, ref location, ArchetypeWithRemoved(source, type));
@@ -459,7 +467,7 @@ public sealed class World : IDisposable
             return _rootArchetype;
         }
 
-        Span<ComponentTypeId> sorted = types.Length <= MaxStackTypes
+        var sorted = types.Length <= MaxStackTypes
             ? stackalloc ComponentTypeId[types.Length]
             : new ComponentTypeId[types.Length];
         types.CopyTo(sorted);
@@ -486,7 +494,7 @@ public sealed class World : IDisposable
         }
 
         var count = source.Types.Length + 1;
-        Span<ComponentTypeId> types = count <= MaxStackTypes ? stackalloc ComponentTypeId[count] : new ComponentTypeId[count];
+        var types = count <= MaxStackTypes ? stackalloc ComponentTypeId[count] : new ComponentTypeId[count];
         var write = 0;
         var inserted = false;
         foreach (var existing in source.Types)
@@ -519,7 +527,7 @@ public sealed class World : IDisposable
         }
 
         var count = source.Types.Length - 1;
-        Span<ComponentTypeId> types = count <= MaxStackTypes ? stackalloc ComponentTypeId[count] : new ComponentTypeId[count];
+        var types = count <= MaxStackTypes ? stackalloc ComponentTypeId[count] : new ComponentTypeId[count];
         var write = 0;
         foreach (var existing in source.Types)
         {
@@ -673,7 +681,8 @@ public sealed class World : IDisposable
     {
         if (!location.Chunk!.Archetype.Has(info.Id))
         {
-            throw new InvalidOperationException($"{location.Chunk.Entities[location.Index]} has no {info.Type} component.");
+            throw new InvalidOperationException(
+                $"{location.Chunk.Entities[location.Index]} has no {info.Type} component.");
         }
     }
 
