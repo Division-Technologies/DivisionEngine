@@ -17,13 +17,22 @@
 
 #include <tracy/TracyC.h>
 
+#include <algorithm>
+#include <array>
 #include <atomic>
-#include <cstdarg>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <format>
 #include <mutex>
+#include <new>
+#include <optional>
+#include <source_location>
+#include <span>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 #include "CorProfSlots.h"
@@ -33,9 +42,50 @@ namespace {
 
 // ----- configuration -----
 
+/// An environment variable, or nothing if it is unset. MSVC's CRT deprecates std::getenv, so
+/// Windows goes through getenv_s, which copies the value out instead of handing back its storage.
+std::optional<std::string> ReadEnvironment(const char* name) {
+#if defined(_WIN32)
+    std::size_t required = 0;
+    if (getenv_s(&required, nullptr, 0, name) != 0 || required == 0) {
+        return std::nullopt;
+    }
+
+    std::string value(required, '\0');
+    if (getenv_s(&required, value.data(), value.size(), name) != 0) {
+        return std::nullopt;
+    }
+
+    // The count includes the terminator.
+    value.resize(required - 1);
+    return value;
+#else
+    const char* value = std::getenv(name);
+    if (value == nullptr) {
+        return std::nullopt;
+    }
+
+    return std::string(value);
+#endif
+}
+
+/// Calls visit with each entry of a comma-separated list. A trailing comma adds no empty entry.
+template <typename Visit>
+void ForEachListEntry(std::string_view list, Visit visit) {
+    while (!list.empty()) {
+        const std::size_t comma = list.find(',');
+        visit(list.substr(0, comma));
+        if (comma == std::string_view::npos) {
+            return;
+        }
+
+        list.remove_prefix(comma + 1);
+    }
+}
+
 /// Event groups, selected by DIVISION_CLR_EVENTS. Separate because their volumes differ by orders
 /// of magnitude: suspensions are rare and always interesting, JIT zones flood the first second.
-enum Category : unsigned {
+enum Category : std::uint8_t {
     kCategorySuspend = 1u << 0,
     kCategoryGc = 1u << 1,
     kCategoryJit = 1u << 2,
@@ -43,14 +93,14 @@ enum Category : unsigned {
     kCategoryDeep = 1u << 4,
 };
 
-constexpr unsigned kDefaultCategories = kCategorySuspend | kCategoryGc | kCategoryJit;
+constexpr unsigned DEFAULT_CATEGORIES = kCategorySuspend | kCategoryGc | kCategoryJit;
 
 struct CategoryName {
-    const char* name;
+    std::string_view name;
     unsigned value;
 };
 
-constexpr CategoryName kCategoryNames[] = {
+constexpr std::array<CategoryName, 7> CATEGORY_NAMES = {{
     {"suspend", kCategorySuspend},
     {"gc", kCategoryGc},
     {"jit", kCategoryJit},
@@ -59,53 +109,44 @@ constexpr CategoryName kCategoryNames[] = {
     // Deliberately not in "all": deep mode costs an order of magnitude and has to be asked for.
     {"all", kCategorySuspend | kCategoryGc | kCategoryJit | kCategoryLoader},
     {"none", 0},
-};
+}};
 
-unsigned g_categories = kDefaultCategories;
+unsigned g_categories = DEFAULT_CATEGORIES;
 bool g_verbose = false;
 
-void Report(const char* format, ...) {
-    if (!g_verbose) {
-        return;
-    }
+/// Writes one line to stderr. Always, unlike Report: for what the user has to know about, such as
+/// asking for something this profiler cannot do.
+template <typename... Args>
+void Warn(std::format_string<Args...> format, Args&&... args) {
+    const std::string line = std::format("[DivisionClrProfiler] {}\n", std::format(format, std::forward<Args>(args)...));
+    std::fputs(line.c_str(), stderr);
+}
 
-    std::va_list args;
-    va_start(args, format);
-    std::fputs("[DivisionClrProfiler] ", stderr);
-    std::vfprintf(stderr, format, args);
-    std::fputc('\n', stderr);
-    va_end(args);
+/// Writes one line to stderr when DIVISION_CLR_VERBOSE is set.
+template <typename... Args>
+void Report(std::format_string<Args...> format, Args&&... args) {
+    if (g_verbose) {
+        Warn(format, std::forward<Args>(args)...);
+    }
 }
 
 /// Parses DIVISION_CLR_EVENTS, a comma-separated list of the names above. An unknown name is
 /// reported and ignored rather than fatal: a profiler that refuses to load over a typo in an
 /// environment variable is worse than one that records less than asked.
-unsigned ParseCategories(const char* value) {
-    if (value == nullptr || *value == '\0') {
-        return kDefaultCategories;
+unsigned ParseCategories(const std::optional<std::string>& value) {
+    if (!value.has_value() || value->empty()) {
+        return DEFAULT_CATEGORIES;
     }
 
     unsigned categories = 0;
-    const char* cursor = value;
-    while (*cursor != '\0') {
-        const char* end = std::strchr(cursor, ',');
-        const std::size_t length = end == nullptr ? std::strlen(cursor) : static_cast<std::size_t>(end - cursor);
-
-        bool matched = false;
-        for (const auto& candidate : kCategoryNames) {
-            if (std::strlen(candidate.name) == length && std::strncmp(candidate.name, cursor, length) == 0) {
-                categories |= candidate.value;
-                matched = true;
-                break;
-            }
+    ForEachListEntry(*value, [&](std::string_view entry) {
+        const auto candidate = std::ranges::find(CATEGORY_NAMES, entry, &CategoryName::name);
+        if (candidate != CATEGORY_NAMES.end()) {
+            categories |= candidate->value;
+        } else {
+            Warn("unknown event group in DIVISION_CLR_EVENTS: {}", entry);
         }
-
-        if (!matched) {
-            std::fprintf(stderr, "[DivisionClrProfiler] unknown event group in DIVISION_CLR_EVENTS: %.*s\n", static_cast<int>(length), cursor);
-        }
-
-        cursor = end == nullptr ? cursor + length : end + 1;
-    }
+    });
 
     return categories;
 }
@@ -115,44 +156,45 @@ unsigned ParseCategories(const char* value) {
 // Colors are chosen against DivisionEngine/Profiling/ProfilerColors.cs: the engine's own zones are
 // blue (phase), orange (behavior) and muted grey (idle), so the runtime gets the red end. A
 // stop-the-world is the one thing on the timeline that no engine-side change can schedule around.
-constexpr std::uint32_t kColorSuspend = 0xB03A3A;
-constexpr std::uint32_t kColorStopped = 0x7C1F1F;
-constexpr std::uint32_t kColorGc = 0x8F4FBF;
-constexpr std::uint32_t kColorJit = 0x3F8F6F;
-constexpr std::uint32_t kColorLoader = 0x8F7F3F;
-constexpr std::uint32_t kColorDeep = 0x4F6F8F;
+constexpr std::uint32_t COLOR_SUSPEND = 0xB03A3A;
+constexpr std::uint32_t COLOR_STOPPED = 0x7C1F1F;
+constexpr std::uint32_t COLOR_GC = 0x8F4FBF;
+constexpr std::uint32_t COLOR_JIT = 0x3F8F6F;
+constexpr std::uint32_t COLOR_LOADER = 0x8F7F3F;
+constexpr std::uint32_t COLOR_DEEP = 0x4F6F8F;
 
-/// A zone call site. The file and line are this file's, so the profiler's UI still lands on the
+/// A zone call site. The file and line are the caller's, so the profiler's UI still lands on the
 /// code that opened the zone - there is no managed call site to point at.
-#define DIVISION_ZONE(name, color) \
-    ___tracy_source_location_data { (name), "DivisionClrProfiler", __FILE__, __LINE__, (color) }
+consteval ___tracy_source_location_data Zone(const char* name, std::uint32_t color, std::source_location site = std::source_location::current()) {
+    return {name, "DivisionClrProfiler", site.file_name(), site.line(), color};
+}
 
 /// One source location per suspend reason, indexed by COR_PRF_SUSPEND_REASON. Distinct locations
 /// rather than one zone renamed per event, because Tracy aggregates its statistics per call site:
 /// sharing one would collapse "how long does the runtime stop for a GC" into the same row as
 /// "how long for a rejit". Same reasoning as Profiler.ZoneNamed on the managed side.
-constexpr ___tracy_source_location_data kSuspendLocations[kSuspendReasonCount] = {
-    DIVISION_ZONE("EE suspend: other", kColorSuspend),
-    DIVISION_ZONE("EE suspend: GC", kColorSuspend),
-    DIVISION_ZONE("EE suspend: appdomain shutdown", kColorSuspend),
-    DIVISION_ZONE("EE suspend: code pitching", kColorSuspend),
-    DIVISION_ZONE("EE suspend: shutdown", kColorSuspend),
-    DIVISION_ZONE("EE suspend: unused", kColorSuspend),
-    DIVISION_ZONE("EE suspend: in-proc debugger", kColorSuspend),
-    DIVISION_ZONE("EE suspend: GC prep", kColorSuspend),
-    DIVISION_ZONE("EE suspend: rejit", kColorSuspend),
-    DIVISION_ZONE("EE suspend: profiler", kColorSuspend),
-};
+constexpr std::array<___tracy_source_location_data, kSuspendReasonCount> SUSPEND_LOCATIONS = {{
+    Zone("EE suspend: other", COLOR_SUSPEND),
+    Zone("EE suspend: GC", COLOR_SUSPEND),
+    Zone("EE suspend: appdomain shutdown", COLOR_SUSPEND),
+    Zone("EE suspend: code pitching", COLOR_SUSPEND),
+    Zone("EE suspend: shutdown", COLOR_SUSPEND),
+    Zone("EE suspend: unused", COLOR_SUSPEND),
+    Zone("EE suspend: in-proc debugger", COLOR_SUSPEND),
+    Zone("EE suspend: GC prep", COLOR_SUSPEND),
+    Zone("EE suspend: rejit", COLOR_SUSPEND),
+    Zone("EE suspend: profiler", COLOR_SUSPEND),
+}};
 
-constexpr ___tracy_source_location_data kStoppedLocation = DIVISION_ZONE("EE stopped", kColorStopped);
-constexpr ___tracy_source_location_data kGcLocations[] = {
-    DIVISION_ZONE("GC gen0", kColorGc),
-    DIVISION_ZONE("GC gen1", kColorGc),
-    DIVISION_ZONE("GC gen2", kColorGc),
-};
-constexpr ___tracy_source_location_data kGcUnknownLocation = DIVISION_ZONE("GC", kColorGc);
-constexpr ___tracy_source_location_data kJitLocation = DIVISION_ZONE("JIT", kColorJit);
-constexpr ___tracy_source_location_data kModuleLocation = DIVISION_ZONE("Module load", kColorLoader);
+constexpr ___tracy_source_location_data STOPPED_LOCATION = Zone("EE stopped", COLOR_STOPPED);
+constexpr std::array<___tracy_source_location_data, 3> GC_LOCATIONS = {{
+    Zone("GC gen0", COLOR_GC),
+    Zone("GC gen1", COLOR_GC),
+    Zone("GC gen2", COLOR_GC),
+}};
+constexpr ___tracy_source_location_data GC_UNKNOWN_LOCATION = Zone("GC", COLOR_GC);
+constexpr ___tracy_source_location_data JIT_LOCATION = Zone("JIT", COLOR_JIT);
+constexpr ___tracy_source_location_data MODULE_LOCATION = Zone("Module load", COLOR_LOADER);
 
 /// The zones this profiler holds open across two callbacks, as one stack per thread.
 ///
@@ -162,7 +204,7 @@ constexpr ___tracy_source_location_data kModuleLocation = DIVISION_ZONE("Module 
 /// zone is closed and reopened immediately, which splits it into abutting segments instead of
 /// either losing it or corrupting the capture - and a capture with a single bad pair is rejected
 /// whole ("Invalid order of zone begin and end events"), so this is not a case to leave to luck.
-enum ZoneKey : unsigned {
+enum ZoneKey : std::uint8_t {
     kKeySuspend,
     kKeyStopped,
     kKeyGc,
@@ -175,61 +217,62 @@ enum ZoneKey : unsigned {
 struct OpenZone {
     TracyCZoneCtx context;
     const ___tracy_source_location_data* location;
-    unsigned key;
+    ZoneKey key;
     bool emitted;
 };
 
 /// How deep the stack may get. Ordinarily a handful of zones nest; deep mode nests one per managed
 /// frame, so the limit doubles as the cap on how much of a call tree is recorded.
-constexpr int kStackLimit = 32;
-constexpr int kDeepStackLimitDefault = 64;
+constexpr int STACK_LIMIT = 32;
+constexpr int DEEP_STACK_LIMIT_DEFAULT = 64;
 
-int g_stackLimit = kStackLimit;
+int g_stack_limit = STACK_LIMIT;
 
 /// How many nested managed frames deep mode records before it stops opening zones. A cap rather
 /// than a fixed size: a recursive descent parser will happily nest a thousand frames, and the
 /// interesting part is the top of that, not the bottom.
 int DeepStackLimit() {
-    const char* value = std::getenv("DIVISION_CLR_DEEP_DEPTH");
-    if (value != nullptr) {
-        const int parsed = std::atoi(value);
+    const std::optional<std::string> value = ReadEnvironment("DIVISION_CLR_DEEP_DEPTH");
+    if (value.has_value()) {
+        const int parsed = std::atoi(value->c_str());
         if (parsed > 0) {
             return parsed;
         }
     }
 
-    return kDeepStackLimitDefault;
+    return DEEP_STACK_LIMIT_DEFAULT;
 }
 
 /// Per thread, grown on demand. Not a fixed array: deep mode needs hundreds of entries and every
 /// other mode needs a handful, and paying the deep size in thread-local storage on every thread of
 /// a process that is not deep profiling would be the wrong trade.
 struct ZoneStack {
-    OpenZone* items = nullptr;
+    /// Every slot up to the capacity; only the first depth of them are open zones.
+    std::vector<OpenZone> items;
     int depth = 0;
-    int capacity = 0;
 
     /// Zones that could not be opened because the stack was full, so that their close still balances.
-    unsigned dropped[kKeyCount] = {};
+    std::array<unsigned, kKeyCount> dropped = {};
 
-    ~ZoneStack() {
-        std::free(items);
+    unsigned& Dropped(ZoneKey key) {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index): every ZoneKey but kKeyCount is in range, and kKeyCount is never passed.
+        return dropped[key];
     }
 
     bool Reserve(int wanted) {
+        const int capacity = static_cast<int>(items.size());
         if (wanted <= capacity) {
             return true;
         }
 
         const int grown = capacity == 0 ? 16 : capacity * 2;
-        const int size = grown > wanted ? grown : wanted;
-        auto* moved = static_cast<OpenZone*>(std::realloc(items, sizeof(OpenZone) * static_cast<std::size_t>(size)));
-        if (moved == nullptr) {
+        try {
+            items.resize(static_cast<std::size_t>(std::max(grown, wanted)));
+        } catch (const std::bad_alloc&) {
+            // Out of memory is a dropped zone, not an exception escaping into the runtime.
             return false;
         }
 
-        items = moved;
-        capacity = size;
         return true;
     }
 };
@@ -238,7 +281,7 @@ thread_local ZoneStack t_zones;
 
 std::atomic<std::uint32_t> g_splits{0};
 
-constexpr char kContinued[] = "continued";
+constexpr std::string_view CONTINUED = "continued";
 
 /// Whether the Tracy client is up. Emitting before that is undefined under TRACY_MANUAL_LIFETIME,
 /// and the runtime starts calling us long before any managed code runs.
@@ -253,8 +296,8 @@ bool TracyReady() {
 /// The managed side checks whether the client is already running before starting it, so the two
 /// cannot both start it.
 void StartTracyIfAsked() {
-    const char* value = std::getenv("DIVISION_CLR_START_TRACY");
-    if (value == nullptr || value[0] != '1' || ___tracy_profiler_started() != 0) {
+    const std::optional<std::string> value = ReadEnvironment("DIVISION_CLR_START_TRACY");
+    if (!value.has_value() || !value->starts_with('1') || ___tracy_profiler_started() != 0) {
         return;
     }
 
@@ -262,9 +305,9 @@ void StartTracyIfAsked() {
     Report("started the Tracy client");
 }
 
-void Annotate(OpenZone* zone, const char* text, std::size_t length) {
+void Annotate(OpenZone* zone, std::string_view text) {
     if (zone != nullptr && zone->emitted && TracyReady()) {
-        ___tracy_emit_zone_text(zone->context, text, length);
+        ___tracy_emit_zone_text(zone->context, text.data(), text.size());
     }
 }
 
@@ -283,10 +326,10 @@ void CloseAt(OpenZone& zone) {
     zone.emitted = false;
 }
 
-void PushZone(unsigned key, const ___tracy_source_location_data& location) {
+void PushZone(ZoneKey key, const ___tracy_source_location_data& location) {
     ZoneStack& stack = t_zones;
-    if (stack.depth >= g_stackLimit || !stack.Reserve(stack.depth + 1)) {
-        ++stack.dropped[key];
+    if (stack.depth >= g_stack_limit || !stack.Reserve(stack.depth + 1)) {
+        ++stack.Dropped(key);
         return;
     }
 
@@ -296,7 +339,7 @@ void PushZone(unsigned key, const ___tracy_source_location_data& location) {
     OpenAt(zone);
 }
 
-OpenZone* TopZone(unsigned key) {
+OpenZone* TopZone(ZoneKey key) {
     ZoneStack& stack = t_zones;
     for (int index = stack.depth - 1; index >= 0; --index) {
         if (stack.items[index].key == key) {
@@ -307,10 +350,10 @@ OpenZone* TopZone(unsigned key) {
     return nullptr;
 }
 
-void PopZone(unsigned key) {
+void PopZone(ZoneKey key) {
     ZoneStack& stack = t_zones;
-    if (stack.dropped[key] > 0) {
-        --stack.dropped[key];
+    if (unsigned& dropped = stack.Dropped(key); dropped > 0) {
+        --dropped;
         return;
     }
 
@@ -336,7 +379,7 @@ void PopZone(unsigned key) {
     for (int index = target + 1; index < stack.depth; ++index) {
         stack.items[index - 1] = stack.items[index];
         OpenAt(stack.items[index - 1]);
-        Annotate(&stack.items[index - 1], kContinued, sizeof(kContinued) - 1);
+        Annotate(&stack.items[index - 1], CONTINUED);
         g_splits.fetch_add(1, std::memory_order_relaxed);
     }
 
@@ -351,64 +394,100 @@ using SetEventMask2Fn = Hresult(DIVISION_STDCALL*)(void*, Dword, Dword);
 using GetModuleInfoFn = Hresult(DIVISION_STDCALL*)(void*, ModuleId, const std::uint8_t**, Ulong, Ulong*, Wchar*, AssemblyId*);
 
 /// The profiling API is COM without a COM runtime: an object is a pointer to a vtable pointer, and
-/// a method is the slot at a known index. CorProfSlots.h supplies the indices.
-template <typename Fn>
-Fn Method(void* object, InfoSlot slot) {
+/// a method is the slot at a known index. CorProfSlots.h supplies the indices, one enum per interface.
+template <typename Fn, typename Slot>
+Fn Method(void* object, Slot slot) {
     auto** vtable = *static_cast<void***>(object);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic): a vtable is a bare array of unknown length; the slot indices come from the ABI.
     return reinterpret_cast<Fn>(vtable[static_cast<std::size_t>(slot)]);
 }
 
 void* g_info = nullptr;
 
+// UTF-16: a pair of surrogates carries 10 bits each of a code point above the basic plane.
+constexpr char32_t HIGH_SURROGATE_FIRST = 0xD800;
+constexpr char32_t LOW_SURROGATE_FIRST = 0xDC00;
+constexpr char32_t SURROGATE_LAST = 0xDFFF;
+constexpr char32_t SUPPLEMENTARY_FIRST = 0x10000;
+constexpr int SURROGATE_BITS = 10;
+constexpr char32_t REPLACEMENT_CHARACTER = 0xFFFD;
+
+// UTF-8: a lead byte that says how many continuation bytes follow, each carrying 6 bits.
+struct Utf8Form {
+    char32_t limit;
+    char32_t lead;
+    int continuations;
+};
+
+constexpr std::array<Utf8Form, 4> UTF8_FORMS = {{
+    {0x80, 0x00, 0},
+    {0x800, 0xC0, 1},
+    {0x10000, 0xE0, 2},
+    {0x110000, 0xF0, 3},
+}};
+constexpr int CONTINUATION_BITS = 6;
+constexpr char32_t CONTINUATION_MARK = 0x80;
+constexpr char32_t CONTINUATION_MASK = 0x3F;
+
+void AppendUtf8(std::string& result, char32_t code) {
+    for (const Utf8Form& form : UTF8_FORMS) {
+        if (code < form.limit) {
+            result.push_back(static_cast<char>(form.lead | (code >> (CONTINUATION_BITS * form.continuations))));
+            for (int index = form.continuations - 1; index >= 0; --index) {
+                result.push_back(static_cast<char>(CONTINUATION_MARK | ((code >> (CONTINUATION_BITS * index)) & CONTINUATION_MASK)));
+            }
+
+            return;
+        }
+    }
+}
+
 /// UTF-16 to UTF-8, for the wide strings the runtime returns. Lone surrogates are passed through as
 /// U+FFFD rather than rejected: this is display text for a timeline, not a round trip.
-std::string ToUtf8(const Wchar* text, std::size_t length) {
+std::string ToUtf8(std::span<const Wchar> text) {
     std::string result;
-    result.reserve(length);
+    result.reserve(text.size());
 
-    for (std::size_t index = 0; index < length; ++index) {
+    for (std::size_t index = 0; index < text.size(); ++index) {
         char32_t code = text[index];
-        if (code >= 0xD800 && code <= 0xDBFF && index + 1 < length && text[index + 1] >= 0xDC00 && text[index + 1] <= 0xDFFF) {
-            code = 0x10000 + ((code - 0xD800) << 10) + (text[index + 1] - 0xDC00);
+        const char32_t next = index + 1 < text.size() ? text[index + 1] : 0;
+        const bool high = code >= HIGH_SURROGATE_FIRST && code < LOW_SURROGATE_FIRST;
+        if (high && next >= LOW_SURROGATE_FIRST && next <= SURROGATE_LAST) {
+            code = SUPPLEMENTARY_FIRST + ((code - HIGH_SURROGATE_FIRST) << SURROGATE_BITS) + (next - LOW_SURROGATE_FIRST);
             ++index;
-        } else if (code >= 0xD800 && code <= 0xDFFF) {
-            code = 0xFFFD;
+        } else if (code >= HIGH_SURROGATE_FIRST && code <= SURROGATE_LAST) {
+            code = REPLACEMENT_CHARACTER;
         }
 
-        if (code < 0x80) {
-            result.push_back(static_cast<char>(code));
-        } else if (code < 0x800) {
-            result.push_back(static_cast<char>(0xC0 | (code >> 6)));
-            result.push_back(static_cast<char>(0x80 | (code & 0x3F)));
-        } else if (code < 0x10000) {
-            result.push_back(static_cast<char>(0xE0 | (code >> 12)));
-            result.push_back(static_cast<char>(0x80 | ((code >> 6) & 0x3F)));
-            result.push_back(static_cast<char>(0x80 | (code & 0x3F)));
-        } else {
-            result.push_back(static_cast<char>(0xF0 | (code >> 18)));
-            result.push_back(static_cast<char>(0x80 | ((code >> 12) & 0x3F)));
-            result.push_back(static_cast<char>(0x80 | ((code >> 6) & 0x3F)));
-            result.push_back(static_cast<char>(0x80 | (code & 0x3F)));
-        }
+        AppendUtf8(result, code);
     }
 
     return result;
 }
 
-std::string ModuleName(ModuleId moduleId) {
+/// How many characters a name buffer passed to the runtime holds.
+constexpr std::size_t NAME_CAPACITY = 512;
+
+using NameBuffer = std::array<Wchar, NAME_CAPACITY>;
+
+/// The name the runtime wrote into a buffer. Its count includes the terminator.
+std::string ToUtf8(const NameBuffer& buffer, Ulong written) {
+    return ToUtf8(std::span(buffer).first(std::min<std::size_t>(written - 1, buffer.size())));
+}
+
+std::string ModuleName(ModuleId module_id) {
     if (g_info == nullptr) {
         return {};
     }
 
-    auto getModuleInfo = Method<GetModuleInfoFn>(g_info, InfoSlot::GetModuleInfo);
-    Wchar buffer[512];
+    auto get_module_info = Method<GetModuleInfoFn>(g_info, InfoSlot::GetModuleInfo);
+    NameBuffer buffer{};
     Ulong written = 0;
-    if (getModuleInfo(g_info, moduleId, nullptr, static_cast<Ulong>(sizeof(buffer) / sizeof(buffer[0])), &written, buffer, nullptr) != kOk || written == 0) {
+    if (get_module_info(g_info, module_id, nullptr, static_cast<Ulong>(buffer.size()), &written, buffer.data(), nullptr) != kOk || written == 0) {
         return {};
     }
 
-    // The count includes the terminator.
-    return ToUtf8(buffer, written - 1);
+    return ToUtf8(buffer, written);
 }
 
 // ----- deep mode -----
@@ -440,12 +519,12 @@ using GetMethodPropsFn = Hresult(DIVISION_STDCALL*)(void*, MdToken, MdToken*, Wc
 using GetTypeDefPropsFn = Hresult(DIVISION_STDCALL*)(void*, MdToken, Wchar*, Ulong, Ulong*, Dword*, MdToken*);
 using SetEnterLeaveHooks2Fn = Hresult(DIVISION_STDCALL*)(void*, void*, void*, void*);
 
-constexpr ___tracy_source_location_data kDeepUnknownLocation = DIVISION_ZONE("managed", kColorDeep);
+constexpr ___tracy_source_location_data DEEP_UNKNOWN_LOCATION = Zone("managed", COLOR_DEEP);
 
 /// Stands for "this method is deliberately not instrumented". Its address is a sentinel in the
 /// name table; the zone itself is never emitted.
-constexpr ___tracy_source_location_data kDeepExcludedLocation = DIVISION_ZONE("excluded", 0);
-constexpr ___tracy_source_location_data kDynamicMethodLocation = DIVISION_ZONE("dynamic method", kColorDeep);
+constexpr ___tracy_source_location_data DEEP_EXCLUDED_LOCATION = Zone("excluded", 0);
+constexpr ___tracy_source_location_data DYNAMIC_METHOD_LOCATION = Zone("dynamic method", COLOR_DEEP);
 
 /// Methods that must not be hooked, as "Type.Method" prefixes.
 ///
@@ -458,34 +537,21 @@ constexpr ___tracy_source_location_data kDynamicMethodLocation = DIVISION_ZONE("
 /// So the rule is: any method whose net effect on the zone stack is not zero has to be listed here.
 /// In the engine that is the profiling API itself, which is the default. Override with
 /// DIVISION_CLR_DEEP_EXCLUDE, a comma-separated list of prefixes; an empty value excludes nothing.
-constexpr const char* kDefaultDeepExclude = "DivisionEngine.Profiler.,DivisionEngine.ProfilerZone.";
+constexpr std::string_view DEFAULT_DEEP_EXCLUDE = "DivisionEngine.Profiler.,DivisionEngine.ProfilerZone.";
 
-std::vector<std::string> g_deepExclude;
+std::vector<std::string> g_deep_exclude;
 
 void LoadDeepExclusions() {
-    const char* value = std::getenv("DIVISION_CLR_DEEP_EXCLUDE");
-    const char* list = value != nullptr ? value : kDefaultDeepExclude;
-
-    const char* cursor = list;
-    while (*cursor != '\0') {
-        const char* end = std::strchr(cursor, ',');
-        const std::size_t length = end == nullptr ? std::strlen(cursor) : static_cast<std::size_t>(end - cursor);
-        if (length > 0) {
-            g_deepExclude.emplace_back(cursor, length);
+    const std::optional<std::string> value = ReadEnvironment("DIVISION_CLR_DEEP_EXCLUDE");
+    ForEachListEntry(value.has_value() ? std::string_view(*value) : DEFAULT_DEEP_EXCLUDE, [](std::string_view entry) {
+        if (!entry.empty()) {
+            g_deep_exclude.emplace_back(entry);
         }
-
-        cursor = end == nullptr ? cursor + length : end + 1;
-    }
+    });
 }
 
 bool IsExcluded(const std::string& name) {
-    for (const auto& prefix : g_deepExclude) {
-        if (name.compare(0, prefix.size(), prefix) == 0) {
-            return true;
-        }
-    }
-
-    return false;
+    return std::ranges::any_of(g_deep_exclude, [&](const std::string& prefix) { return name.starts_with(prefix); });
 }
 
 /// FunctionID to call site, written once per method and then read on every call.
@@ -495,11 +561,11 @@ bool IsExcluded(const std::string& name) {
 /// A method whose name never arrives, and anything past a full table, falls back to "managed".
 class FunctionNames {
   public:
-    static constexpr std::size_t kCapacity = 1u << 16;
+    static constexpr std::size_t CAPACITY = 1u << 16;
 
     const ___tracy_source_location_data* Find(FunctionId id) const {
-        for (std::size_t probe = 0; probe < kMaxProbe; ++probe) {
-            const Slot& slot = slots_[Index(id, probe)];
+        for (std::size_t probe = 0; probe < MAX_PROBE; ++probe) {
+            const Slot& slot = SlotAt(id, probe);
             const auto key = slot.key.load(std::memory_order_acquire);
             if (key == 0) {
                 return nullptr;
@@ -514,9 +580,9 @@ class FunctionNames {
     }
 
     void Add(FunctionId id, const ___tracy_source_location_data* location) {
-        std::lock_guard<std::mutex> guard(mutex_);
-        for (std::size_t probe = 0; probe < kMaxProbe; ++probe) {
-            Slot& slot = slots_[Index(id, probe)];
+        std::lock_guard<std::mutex> guard(mutex);
+        for (std::size_t probe = 0; probe < MAX_PROBE; ++probe) {
+            Slot& slot = SlotAt(id, probe);
             const auto key = slot.key.load(std::memory_order_relaxed);
             if (key == id) {
                 return;
@@ -538,16 +604,17 @@ class FunctionNames {
         std::atomic<const ___tracy_source_location_data*> location{nullptr};
     };
 
-    static constexpr std::size_t kMaxProbe = 32;
+    static constexpr std::size_t MAX_PROBE = 32;
 
-    static std::size_t Index(FunctionId id, std::size_t probe) {
+    Slot& SlotAt(FunctionId id, std::size_t probe) const {
         // FunctionIDs are pointers; the low bits are alignment, so mix before masking.
         const auto hash = static_cast<std::size_t>((id >> 4) * 0x9E3779B97F4A7C15ull);
-        return (hash + probe) & (kCapacity - 1);
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index): masked by CAPACITY - 1, and CAPACITY is a power of two.
+        return slots[(hash + probe) & (CAPACITY - 1)];
     }
 
-    mutable Slot slots_[kCapacity];
-    std::mutex mutex_;
+    mutable std::array<Slot, CAPACITY> slots;
+    std::mutex mutex;
 };
 
 FunctionNames& Names() {
@@ -558,6 +625,7 @@ FunctionNames& Names() {
 /// Copies a string where the profiler can read it whenever it likes. Never freed: one per method,
 /// bounded by the methods the process compiles.
 const char* DupUtf8(const std::string& value) {
+    // NOLINTNEXTLINE(cppcoreguidelines-no-malloc,cppcoreguidelines-owning-memory): deliberately never freed, as above.
     auto* buffer = static_cast<char*>(std::malloc(value.size() + 1));
     if (buffer != nullptr) {
         std::memcpy(buffer, value.c_str(), value.size() + 1);
@@ -567,39 +635,38 @@ const char* DupUtf8(const std::string& value) {
 }
 
 /// "Type.Method", or empty if the metadata could not be read.
-std::string MethodName(FunctionId functionId) {
+std::string MethodName(FunctionId function_id) {
     if (g_info == nullptr) {
         return {};
     }
 
-    std::uintptr_t classId = 0;
-    ModuleId moduleId = 0;
+    std::uintptr_t class_id = 0;
+    ModuleId module_id = 0;
     MdToken token = 0;
-    if (Method<GetFunctionInfoFn>(g_info, InfoSlot::GetFunctionInfo)(g_info, functionId, &classId, &moduleId, &token) != kOk) {
+    if (Method<GetFunctionInfoFn>(g_info, InfoSlot::GetFunctionInfo)(g_info, function_id, &class_id, &module_id, &token) != kOk) {
         return {};
     }
 
     void* import = nullptr;
-    if (Method<GetModuleMetaDataFn>(g_info, InfoSlot::GetModuleMetaData)(g_info, moduleId, kOpenForRead, &kIidMetaDataImport, &import) != kOk || import == nullptr) {
+    if (Method<GetModuleMetaDataFn>(g_info, InfoSlot::GetModuleMetaData)(g_info, module_id, kOpenForRead, &kIidMetaDataImport, &import) != kOk || import == nullptr) {
         return {};
     }
 
-    auto** metadata = *static_cast<void***>(import);
     std::string result;
-    Wchar method[512];
-    Ulong methodLength = 0;
-    MdToken typeToken = 0;
-    auto getMethodProps = reinterpret_cast<GetMethodPropsFn>(metadata[static_cast<std::size_t>(MetadataSlot::GetMethodProps)]);
-    if (getMethodProps(import, token, &typeToken, method, static_cast<Ulong>(sizeof(method) / sizeof(method[0])), &methodLength, nullptr, nullptr, nullptr, nullptr, nullptr) == kOk && methodLength > 0) {
-        Wchar type[512];
-        Ulong typeLength = 0;
-        auto getTypeDefProps = reinterpret_cast<GetTypeDefPropsFn>(metadata[static_cast<std::size_t>(MetadataSlot::GetTypeDefProps)]);
-        if (getTypeDefProps(import, typeToken, type, static_cast<Ulong>(sizeof(type) / sizeof(type[0])), &typeLength, nullptr, nullptr) == kOk && typeLength > 0) {
-            result = ToUtf8(type, typeLength - 1);
+    NameBuffer method{};
+    Ulong method_length = 0;
+    MdToken type_token = 0;
+    auto get_method_props = Method<GetMethodPropsFn>(import, MetadataSlot::GetMethodProps);
+    if (get_method_props(import, token, &type_token, method.data(), static_cast<Ulong>(method.size()), &method_length, nullptr, nullptr, nullptr, nullptr, nullptr) == kOk && method_length > 0) {
+        NameBuffer type{};
+        Ulong type_length = 0;
+        auto get_type_def_props = Method<GetTypeDefPropsFn>(import, MetadataSlot::GetTypeDefProps);
+        if (get_type_def_props(import, type_token, type.data(), static_cast<Ulong>(type.size()), &type_length, nullptr, nullptr) == kOk && type_length > 0) {
+            result = ToUtf8(type, type_length);
             result += '.';
         }
 
-        result += ToUtf8(method, methodLength - 1);
+        result += ToUtf8(method, method_length);
     }
 
     Method<ReleaseFn>(import, InfoSlot::Release)(import);
@@ -612,31 +679,30 @@ std::string MethodName(FunctionId functionId) {
 /// the JIT, so code that was compiled ahead of time (most of the framework, as ReadyToRun) carries
 /// no hooks at all and never reaches them. Which also means deep mode shows the engine and the user
 /// code rather than the insides of the base class library.
-void RememberName(FunctionId functionId) {
-    if (Names().Find(functionId) != nullptr) {
+void RememberName(FunctionId function_id) {
+    if (Names().Find(function_id) != nullptr) {
         return;
     }
 
     // Recorded either way, including when the name cannot be read. Presence in the table is what
     // "this method carries hooks" means, and the enter, leave and unwind paths all rely on that
     // being the same answer - a method that is pushed but not popped is as bad as the reverse.
-    const std::string name = MethodName(functionId);
+    const std::string name = MethodName(function_id);
     if (name.empty()) {
-        Names().Add(functionId, &kDeepUnknownLocation);
+        Names().Add(function_id, &DEEP_UNKNOWN_LOCATION);
         return;
     }
 
     if (IsExcluded(name)) {
-        Names().Add(functionId, &kDeepExcludedLocation);
+        Names().Add(function_id, &DEEP_EXCLUDED_LOCATION);
         return;
     }
 
     const char* copied = DupUtf8(name);
-    auto* location = copied == nullptr
-                         ? nullptr
-                         : static_cast<___tracy_source_location_data*>(std::malloc(sizeof(___tracy_source_location_data)));
+    // NOLINTNEXTLINE(cppcoreguidelines-no-malloc): never freed, like the name - Tracy reads the location for as long as the capture runs.
+    auto* location = copied == nullptr ? nullptr : static_cast<___tracy_source_location_data*>(std::malloc(sizeof(___tracy_source_location_data)));
     if (location == nullptr) {
-        Names().Add(functionId, &kDeepUnknownLocation);
+        Names().Add(function_id, &DEEP_UNKNOWN_LOCATION);
         return;
     }
 
@@ -644,48 +710,48 @@ void RememberName(FunctionId functionId) {
     location->function = copied;
     location->file = __FILE__;
     location->line = 0;
-    location->color = kColorDeep;
-    Names().Add(functionId, location);
+    location->color = COLOR_DEEP;
+    Names().Add(function_id, location);
 }
 
 /// Whether this function's frames carry a zone. Unknown means it was never compiled while we were
 /// attached - code that was compiled ahead of time has no hooks - and excluded means it is one of
 /// the methods that must not be wrapped.
-bool IsInstrumented(FunctionId functionId, const ___tracy_source_location_data*& location) {
-    location = Names().Find(functionId);
-    return location != nullptr && location != &kDeepExcludedLocation;
+bool IsInstrumented(FunctionId function_id, const ___tracy_source_location_data*& location) {
+    location = Names().Find(function_id);
+    return location != nullptr && location != &DEEP_EXCLUDED_LOCATION;
 }
 
-void DIVISION_STDCALL DeepEnter(FunctionId functionId, std::uintptr_t clientData, std::uintptr_t frameInfo, void* argumentInfo) {
-    (void)clientData;
-    (void)frameInfo;
-    (void)argumentInfo;
+void DIVISION_STDCALL DeepEnter(FunctionId function_id, std::uintptr_t client_data, std::uintptr_t frame_info, void* argument_info) {
+    (void)client_data;
+    (void)frame_info;
+    (void)argument_info;
 
     const ___tracy_source_location_data* location = nullptr;
-    if (IsInstrumented(functionId, location)) {
+    if (IsInstrumented(function_id, location)) {
         PushZone(kKeyDeep, *location);
     }
 }
 
-void DIVISION_STDCALL DeepLeave(FunctionId functionId, std::uintptr_t clientData, std::uintptr_t frameInfo, void* returnRange) {
-    (void)clientData;
-    (void)frameInfo;
-    (void)returnRange;
+void DIVISION_STDCALL DeepLeave(FunctionId function_id, std::uintptr_t client_data, std::uintptr_t frame_info, void* return_range) {
+    (void)client_data;
+    (void)frame_info;
+    (void)return_range;
 
     const ___tracy_source_location_data* location = nullptr;
-    if (IsInstrumented(functionId, location)) {
+    if (IsInstrumented(function_id, location)) {
         PopZone(kKeyDeep);
     }
 }
 
 /// A tail call replaces this frame with the callee's, so no leave will arrive for it. The callee
 /// opens its own zone on entry and closes it on its own leave, which keeps the stack balanced.
-void DIVISION_STDCALL DeepTailcall(FunctionId functionId, std::uintptr_t clientData, std::uintptr_t frameInfo) {
-    (void)clientData;
-    (void)frameInfo;
+void DIVISION_STDCALL DeepTailcall(FunctionId function_id, std::uintptr_t client_data, std::uintptr_t frame_info) {
+    (void)client_data;
+    (void)frame_info;
 
     const ___tracy_source_location_data* location = nullptr;
-    if (IsInstrumented(functionId, location)) {
+    if (IsInstrumented(function_id, location)) {
         PopZone(kKeyDeep);
     }
 }
@@ -699,14 +765,14 @@ Hresult DIVISION_STDCALL Ignored(void*) {
     return kOk;
 }
 
-Hresult DIVISION_STDCALL Initialize(void* self, void* infoUnknown) {
+Hresult DIVISION_STDCALL Initialize(void* self, void* info_unknown) {
     (void)self;
 
-    auto queryInterface = Method<QueryInterfaceFn>(infoUnknown, InfoSlot::QueryInterface);
+    auto query_interface = Method<QueryInterfaceFn>(info_unknown, InfoSlot::QueryInterface);
     // ICorProfilerInfo5 is the first with SetEventMask2, and the high mask is what lets the GC
     // callbacks be requested without COR_PRF_MONITOR_GC and its loss of concurrent GC.
-    if (queryInterface(infoUnknown, &kIidCorProfilerInfo5, &g_info) != kOk || g_info == nullptr) {
-        std::fprintf(stderr, "[DivisionClrProfiler] the runtime does not offer ICorProfilerInfo5; not recording.\n");
+    if (query_interface(info_unknown, &kIidCorProfilerInfo5, &g_info) != kOk || g_info == nullptr) {
+        Warn("the runtime does not offer ICorProfilerInfo5; not recording.");
         return kFail;
     }
 
@@ -731,14 +797,14 @@ Hresult DIVISION_STDCALL Initialize(void* self, void* infoUnknown) {
         // Exceptions come with it: without the unwind callbacks, the first exception leaves a zone
         // open on its thread and the capture is no longer properly nested.
         low |= kMonitorEnterLeave | kMonitorExceptions;
-        g_stackLimit = DeepStackLimit();
+        g_stack_limit = DeepStackLimit();
         LoadDeepExclusions();
     }
 
-    auto setEventMask2 = Method<SetEventMask2Fn>(g_info, InfoSlot::SetEventMask2);
-    const Hresult status = setEventMask2(g_info, low, high);
+    auto set_event_mask2 = Method<SetEventMask2Fn>(g_info, InfoSlot::SetEventMask2);
+    const Hresult status = set_event_mask2(g_info, low, high);
     if (status != kOk) {
-        std::fprintf(stderr, "[DivisionClrProfiler] SetEventMask2(0x%x, 0x%x) failed with 0x%08x; not recording.\n", low, high, static_cast<unsigned>(status));
+        Warn("SetEventMask2({:#x}, {:#x}) failed with 0x{:08x}; not recording.", low, high, static_cast<std::uint32_t>(status));
         return status;
     }
 
@@ -749,14 +815,14 @@ Hresult DIVISION_STDCALL Initialize(void* self, void* infoUnknown) {
             g_info, reinterpret_cast<void*>(&DeepEnter), reinterpret_cast<void*>(&DeepLeave), reinterpret_cast<void*>(&DeepTailcall)
         );
         if (hooks != kOk) {
-            std::fprintf(stderr, "[DivisionClrProfiler] deep mode unavailable (0x%08x).\n", static_cast<unsigned>(hooks));
+            Warn("deep mode unavailable (0x{:08x}).", static_cast<std::uint32_t>(hooks));
         } else {
-            Report("deep mode on, stack limit %d, %zu exclusion prefixes", g_stackLimit, g_deepExclude.size());
+            Report("deep mode on, stack limit {}, {} exclusion prefixes", g_stack_limit, g_deep_exclude.size());
         }
     }
 
     StartTracyIfAsked();
-    Report("attached; events low=0x%x high=0x%x", low, high);
+    Report("attached; events low={:#x} high={:#x}", low, high);
     return kOk;
 }
 
@@ -770,7 +836,7 @@ Hresult DIVISION_STDCALL Shutdown(void* self) {
 
     const std::uint32_t splits = g_splits.load(std::memory_order_relaxed);
     if (splits != 0) {
-        Report("%u zones were split because the runtime's events crossed", splits);
+        Report("{} zones were split because the runtime's events crossed", splits);
     }
 
     return kOk;
@@ -778,7 +844,8 @@ Hresult DIVISION_STDCALL Shutdown(void* self) {
 
 Hresult DIVISION_STDCALL RuntimeSuspendStarted(void* self, Dword reason) {
     (void)self;
-    PushZone(kKeySuspend, kSuspendLocations[reason < kSuspendReasonCount ? reason : kSuspendOther]);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index): reasons past the table fall back to kSuspendOther.
+    PushZone(kKeySuspend, SUSPEND_LOCATIONS[reason < kSuspendReasonCount ? reason : kSuspendOther]);
     return kOk;
 }
 
@@ -787,7 +854,7 @@ Hresult DIVISION_STDCALL RuntimeSuspendStarted(void* self, Dword reason) {
 /// genuinely long pause.
 Hresult DIVISION_STDCALL RuntimeSuspendFinished(void* self) {
     (void)self;
-    PushZone(kKeyStopped, kStoppedLocation);
+    PushZone(kKeyStopped, STOPPED_LOCATION);
     return kOk;
 }
 
@@ -810,21 +877,23 @@ Hresult DIVISION_STDCALL RuntimeResumeFinished(void* self) {
     return kOk;
 }
 
-Hresult DIVISION_STDCALL GarbageCollectionStarted(void* self, int generationCount, Bool32* generationCollected, Dword reason) {
+Hresult DIVISION_STDCALL GarbageCollectionStarted(void* self, int generation_count, Bool32* generation_collected, Dword reason) {
     (void)self;
 
     // The array is indexed by COR_PRF_GC_GENERATION, where 3 and 4 are the large and pinned object
     // heaps. The generation a capture is read by is the highest ephemeral one.
-    int generation = -1;
-    for (int index = 0; index < generationCount && index < 3; ++index) {
-        if (generationCollected[index] != 0) {
-            generation = index;
+    const std::span<const Bool32> collected(generation_collected, static_cast<std::size_t>(std::max(generation_count, 0)));
+    const ___tracy_source_location_data* location = &GC_UNKNOWN_LOCATION;
+    for (std::size_t index = 0; index < collected.size() && index < GC_LOCATIONS.size(); ++index) {
+        if (collected[index] != 0) {
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index): the loop is bounded by its size.
+            location = &GC_LOCATIONS[index];
         }
     }
 
-    PushZone(kKeyGc, generation >= 0 ? kGcLocations[generation] : kGcUnknownLocation);
+    PushZone(kKeyGc, *location);
     if (reason == kGcInduced) {
-        Annotate(TopZone(kKeyGc), "induced", 7);
+        Annotate(TopZone(kKeyGc), "induced");
     }
 
     return kOk;
@@ -836,32 +905,32 @@ Hresult DIVISION_STDCALL GarbageCollectionFinished(void* self) {
     return kOk;
 }
 
-Hresult DIVISION_STDCALL JitCompilationStarted(void* self, FunctionId functionId, Bool32 safeToBlock) {
+Hresult DIVISION_STDCALL JitCompilationStarted(void* self, FunctionId function_id, Bool32 safe_to_block) {
     (void)self;
-    (void)safeToBlock;
+    (void)safe_to_block;
 
     if ((g_categories & kCategoryJit) == 0) {
         return kOk;
     }
 
-    PushZone(kKeyJit, kJitLocation);
+    PushZone(kKeyJit, JIT_LOCATION);
     if (OpenZone* zone = TopZone(kKeyJit); zone != nullptr && zone->emitted && TracyReady()) {
         // The method's name would need IMetaDataImport, which is a second ABI to pin down. The id
         // is enough to tell one method's compilations apart and to count them.
-        ___tracy_emit_zone_value(zone->context, static_cast<std::uint64_t>(functionId));
+        ___tracy_emit_zone_value(zone->context, static_cast<std::uint64_t>(function_id));
     }
 
     return kOk;
 }
 
-Hresult DIVISION_STDCALL JitCompilationFinished(void* self, FunctionId functionId, Hresult status, Bool32 safeToBlock) {
+Hresult DIVISION_STDCALL JitCompilationFinished(void* self, FunctionId function_id, Hresult status, Bool32 safe_to_block) {
     (void)self;
-    (void)safeToBlock;
+    (void)safe_to_block;
 
     // The method now exists, so its metadata can be read - which is the documented place to do it,
     // and the reason deep mode does not resolve names from inside the hooks.
     if ((g_categories & kCategoryDeep) != 0 && status == kOk) {
-        RememberName(functionId);
+        RememberName(function_id);
     }
 
     if ((g_categories & kCategoryJit) != 0) {
@@ -874,34 +943,34 @@ Hresult DIVISION_STDCALL JitCompilationFinished(void* self, FunctionId functionI
 /// IL stubs, lambdas compiled through DynamicMethod, and the like. They are JIT compiled and so do
 /// carry hooks, but they have no metadata to name them - they are recorded under one shared name so
 /// that entering and leaving them stays consistent.
-Hresult DIVISION_STDCALL DynamicMethodJitCompilationFinished(void* self, FunctionId functionId, Hresult status, Bool32 safeToBlock) {
+Hresult DIVISION_STDCALL DynamicMethodJitCompilationFinished(void* self, FunctionId function_id, Hresult status, Bool32 safe_to_block) {
     (void)self;
-    (void)safeToBlock;
+    (void)safe_to_block;
 
-    if ((g_categories & kCategoryDeep) != 0 && status == kOk && Names().Find(functionId) == nullptr) {
-        Names().Add(functionId, &kDynamicMethodLocation);
+    if ((g_categories & kCategoryDeep) != 0 && status == kOk && Names().Find(function_id) == nullptr) {
+        Names().Add(function_id, &DYNAMIC_METHOD_LOCATION);
     }
 
     return kOk;
 }
 
-Hresult DIVISION_STDCALL ModuleLoadStarted(void* self, ModuleId moduleId) {
+Hresult DIVISION_STDCALL ModuleLoadStarted(void* self, ModuleId module_id) {
     (void)self;
-    (void)moduleId;
+    (void)module_id;
 
-    PushZone(kKeyModule, kModuleLocation);
+    PushZone(kKeyModule, MODULE_LOCATION);
     return kOk;
 }
 
-Hresult DIVISION_STDCALL ModuleLoadFinished(void* self, ModuleId moduleId, Hresult status) {
+Hresult DIVISION_STDCALL ModuleLoadFinished(void* self, ModuleId module_id, Hresult status) {
     (void)self;
     (void)status;
 
     // Named here rather than at the start: the module has no name until it has been loaded.
     if (OpenZone* zone = TopZone(kKeyModule); zone != nullptr && zone->emitted) {
-        const std::string name = ModuleName(moduleId);
+        const std::string name = ModuleName(module_id);
         if (!name.empty()) {
-            Annotate(zone, name.c_str(), name.size());
+            Annotate(zone, name);
         }
     }
 
@@ -915,11 +984,11 @@ Hresult DIVISION_STDCALL ModuleLoadFinished(void* self, ModuleId moduleId, Hresu
 /// The enter half of the pair rather than the leave half, because only this one is told which
 /// function is being unwound - and frames without hooks are unwound too, so popping blindly would
 /// close zones belonging to somebody else.
-Hresult DIVISION_STDCALL ExceptionUnwindFunctionEnter(void* self, FunctionId functionId) {
+Hresult DIVISION_STDCALL ExceptionUnwindFunctionEnter(void* self, FunctionId function_id) {
     (void)self;
 
     const ___tracy_source_location_data* location = nullptr;
-    if ((g_categories & kCategoryDeep) != 0 && IsInstrumented(functionId, location)) {
+    if ((g_categories & kCategoryDeep) != 0 && IsInstrumented(function_id, location)) {
         PopZone(kKeyDeep);
     }
 
@@ -929,7 +998,7 @@ Hresult DIVISION_STDCALL ExceptionUnwindFunctionEnter(void* self, FunctionId fun
 // ----- the COM object -----
 
 struct CallbackVtable {
-    void* slots[static_cast<std::size_t>(CallbackSlot::SlotCount)];
+    std::array<void*, static_cast<std::size_t>(CallbackSlot::SlotCount)> slots;
 };
 
 struct CallbackObject {
@@ -942,6 +1011,7 @@ Ulong DIVISION_STDCALL CallbackRelease(void*);
 
 template <typename Fn>
 void Put(CallbackVtable& table, CallbackSlot slot, Fn function) {
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index): every CallbackSlot but SlotCount is in range, and SlotCount is never passed.
     table.slots[static_cast<std::size_t>(slot)] = reinterpret_cast<void*>(function);
 }
 
@@ -1017,8 +1087,11 @@ Ulong DIVISION_STDCALL CallbackRelease(void*) {
 
 // ----- the class factory -----
 
+/// IUnknown's three methods, then IClassFactory's CreateInstance and LockServer.
+constexpr std::size_t FACTORY_SLOT_COUNT = 5;
+
 struct FactoryVtable {
-    void* slots[5];
+    std::array<void*, FACTORY_SLOT_COUNT> slots;
 };
 
 struct FactoryObject {
@@ -1075,9 +1148,9 @@ FactoryObject& Factory() {
 /// client belongs to the engine and is not touched from here.
 struct Configuration {
     Configuration() {
-        const char* verbose = std::getenv("DIVISION_CLR_VERBOSE");
-        g_verbose = verbose != nullptr && verbose[0] == '1';
-        g_categories = ParseCategories(std::getenv("DIVISION_CLR_EVENTS"));
+        const std::optional<std::string> verbose = ReadEnvironment("DIVISION_CLR_VERBOSE");
+        g_verbose = verbose.has_value() && verbose->starts_with('1');
+        g_categories = ParseCategories(ReadEnvironment("DIVISION_CLR_EVENTS"));
     }
 };
 
@@ -1107,5 +1180,3 @@ DIVISION_EXPORT division::clr::Hresult DIVISION_STDCALL DllCanUnloadNow() {
     // S_FALSE: the profiler stays for the life of the process.
     return 1;
 }
-
-#undef DIVISION_ZONE
