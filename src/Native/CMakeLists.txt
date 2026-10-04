@@ -23,9 +23,14 @@ target_sources(core
     PUBLIC
         FILE_SET cxx_modules TYPE CXX_MODULES FILES ${LIB_MODULES}
 )
+
+# INCLUDE_DIR: モジュールやライブラリを置く場所.
+# SOURCE_DIR : 実装と、それに対応するヘッダを置く場所.
+#              mainからも同じ<graphics_backends/...>で辿れるようPUBLICにする.
 target_include_directories(core
-    PUBLIC  ${INCLUDE_DIR}
-    PRIVATE ${SOURCE_DIR}
+    PUBLIC
+        ${INCLUDE_DIR}
+        ${SOURCE_DIR}
 )
 
 # executeable
@@ -37,8 +42,15 @@ target_link_libraries(main PRIVATE core)
 # Platform-specific graphics backend libraries.
 # Windows: Direct3D 12 / DXGI. Linked here instead of via #pragma comment(lib)
 # in source so that non-Windows builds (macOS/Linux) stay clean.
+#
+# oleaut32/ole32/runtimeobject are required by C++/WinRT (winrt::com_ptr):
+# winrt::hresult_error pulls in GetErrorInfo, SysStringLen/SysFreeString and
+# RoOriginateLanguageException for its error information.
+#
+# D3D12を呼ぶコードはcore側(graphics_backends/dx12)にあるため、coreに紐付ける。
+# PUBLICにすることでcoreをリンクするmainやテストへ伝播する。
 if(WIN32)
-    target_link_libraries(main PRIVATE d3d12 dxgi)
+    target_link_libraries(core PUBLIC d3d12 dxgi oleaut32 ole32 runtimeobject)
 endif()
 
 
