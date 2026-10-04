@@ -6,6 +6,9 @@
 
 
 namespace graphics_backends {
+
+class ResourceFactory;
+
 class Backend {
   public:
     Backend() = default;
@@ -21,6 +24,10 @@ class Backend {
     virtual void RenderFrame() = 0;
     virtual void SetClearColor(const std::array<float, 4>& color) = 0;
     virtual void WaitForGpu() = 0;
+
+    // リソース生成の窓口. Initialize後に有効になる.
+    // 返される参照の寿命はBackendと同じ.
+    [[nodiscard]] virtual ResourceFactory& Resources() noexcept = 0;
 };
 
 }  // namespace graphics_backends

@@ -7,18 +7,31 @@
 
 #include <Windows.h>
 #include <graphics_backends/backend.h>
+#include <graphics_backends/buffer.h>
 #include <graphics_backends/dx12/dx12_backend.h>
+#include <graphics_backends/resource_factory.h>
 #include <winrt/base.h>
 
+#include <array>
 #include <exception>
 #include <memory>
+#include <span>
 #include <string>
 
 
 import Printer;
 
 using graphics_backends::Backend;
+using graphics_backends::Buffer;
+using graphics_backends::BufferDesc;
 namespace dx12 = graphics_backends::dx12;
+
+// 頂点1つぶんの位置. グラフィックスAPI固有の型(XMFLOAT3など)はBackendの内側に閉じ込める.
+struct Vertex {
+    float x;
+    float y;
+    float z;
+};
 
 
 LRESULT WindowProcedure(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
@@ -67,8 +80,27 @@ int main() {
         std::unique_ptr<Backend> backend = std::make_unique<dx12::Dx12Backend>();
         backend->Initialize(hwnd);
 
-
         ShowWindow(hwnd, SW_SHOW);
+
+        //
+        // 頂点バッファの生成
+        //
+        constexpr float HALF_WIDTH = 0.4f;
+        constexpr float HALF_HEIGHT = 0.7f;
+        constexpr float DEPTH = 0.0f;
+        const std::array<Vertex, 4> vertices = {
+            Vertex{-HALF_WIDTH, -HALF_HEIGHT, DEPTH},  // 左下
+            Vertex{-HALF_WIDTH, HALF_HEIGHT, DEPTH},   // 左上
+            Vertex{HALF_WIDTH, -HALF_HEIGHT, DEPTH},   // 右下
+            Vertex{HALF_WIDTH, HALF_HEIGHT, DEPTH},    // 右上
+        };
+
+        // DX12固有の型はBackendの内側に閉じており、ここではBuffer越しにだけ扱う.
+        // vertex_bufferはbackendより後に宣言されているので、先に破棄される.
+        const BufferDesc vertex_buffer_desc{.size_in_bytes = sizeof(vertices)};
+        std::unique_ptr<Buffer> vertex_buffer = backend->Resources().CreateBuffer(vertex_buffer_desc);
+        vertex_buffer->Write(std::as_bytes(std::span{vertices}));
+
 
         MSG msg{};
         while (true) {
