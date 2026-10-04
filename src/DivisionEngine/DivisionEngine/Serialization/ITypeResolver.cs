@@ -6,7 +6,7 @@ namespace DivisionEngine;
 ///     <see cref="TypeIdAttribute" /> value, or the hash of the type name); documents written
 ///     before GUID type IDs pass the legacy <see cref="System.Type.FullName" /> instead.
 ///     <para>
-///         The default behaviour reads the <see cref="SerializedTypeRegistrationAttribute" />s of
+///         The default behavior reads the <see cref="SerializedTypeRegistrationAttribute" />s of
 ///         loaded non-collectible assemblies. A custom resolver is supplied during script
 ///         hot-reload so that user types resolve against the active (collectible) user
 ///         <c>AssemblyLoadContext</c> rather than a stale, soon-to-be-unloaded one.

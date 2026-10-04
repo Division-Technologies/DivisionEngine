@@ -6,11 +6,30 @@ namespace DivisionEngine;
 
 // Mutable ref struct — always pass by ref. By-value copies fork the emitter state and corrupt
 // the output (ISerializable/IValueFormatter take serializers as ref parameters for this reason).
-internal ref struct YamlSerializer(Utf8YamlEmitter emitter) : IContainerSerializer
+/// <param name="onUnscopedReference">
+///     Called for each reference to an object that belongs to no scope, which is written as null.
+/// </param>
+internal ref struct YamlSerializer(
+    Utf8YamlEmitter emitter,
+    Action<ISerializableObject>? onUnscopedReference = null) : IContainerSerializer
 {
+    private readonly Action<ISerializableObject>? _onUnscopedReference = onUnscopedReference;
     private Utf8YamlEmitter _emitter = emitter;
     private Stack<YamlSerializationModeKind>? _modes;
     private bool _hasDocument;
+
+    /// <summary>
+    ///     A serializer whose next write, whatever its id, is the document's root node: a value on its
+    ///     own, without the object framing, which <see cref="YamlDeserializer.OverNode" /> reads back.
+    /// </summary>
+    public static YamlSerializer ForNode(Utf8YamlEmitter emitter,
+        Action<ISerializableObject>? onUnscopedReference = null)
+    {
+        var serializer = new YamlSerializer(emitter, onUnscopedReference);
+        serializer._modes = new Stack<YamlSerializationModeKind>();
+        serializer._modes.Push(YamlSerializationModeKind.Sequence);
+        return serializer;
+    }
 
     private void WriteKey(int id, ReadOnlySpan<byte> hintUtf8)
     {
@@ -143,6 +162,15 @@ internal ref struct YamlSerializer(Utf8YamlEmitter emitter) : IContainerSerializ
 
     public void ObjectReference(int id, ReadOnlySpan<byte> hintUtf8, ISerializableObject? value)
     {
+        // An object that belongs to no scope (created at run time rather than loaded from an asset)
+        // has no identity that could be written. It is saved as a null reference, and whoever asked
+        // for the write is told, so the loss is not silent.
+        if (value is not null && value.Scope is null)
+        {
+            _onUnscopedReference?.Invoke(value);
+            value = null;
+        }
+
         WriteKey(id, hintUtf8);
         _emitter.BeginMapping();
         _emitter.WriteString("0");
@@ -150,6 +178,13 @@ internal ref struct YamlSerializer(Utf8YamlEmitter emitter) : IContainerSerializ
         _emitter.WriteString("1");
         _emitter.WriteInt32(value?.Id.Value ?? -1);
         _emitter.EndMapping();
+    }
+
+    public void RawNode(int id, ReadOnlySpan<byte> hintUtf8, ReadOnlyMemory<byte> node)
+    {
+        WriteKey(id, hintUtf8);
+        var parser = YamlNodeCopy.Open(node);
+        YamlNodeCopy.Copy(ref parser, ref _emitter);
     }
 
     public void BeginObject(LocalId id, Type type)

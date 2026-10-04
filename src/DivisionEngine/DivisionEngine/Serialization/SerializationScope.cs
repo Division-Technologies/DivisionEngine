@@ -1,7 +1,3 @@
-using System.Buffers;
-using VYaml.Emitter;
-using VYaml.Parser;
-
 namespace DivisionEngine;
 
 public sealed class SerializationScope : IDisposable
@@ -14,35 +10,6 @@ public sealed class SerializationScope : IDisposable
     {
         _loader = loader;
         Id = id;
-    }
-
-    internal SerializationScope(SerializationScope source) : this(source.Id, source._loader)
-    {
-        foreach (var (localId, old) in source._objects)
-        {
-            var typeName = old.GetType().FullName;
-            if (typeName == null)
-            {
-                continue;
-            }
-
-            var newType = Type.GetType(typeName);
-            if (newType == null)
-            {
-                continue;
-            }
-
-            var newObj = (ISerializableObject?)Activator.CreateInstance(newType);
-            if (newObj == null)
-            {
-                continue;
-            }
-
-            newObj.Id = localId;
-            newObj.Scope = this;
-
-            _objects[localId] = newObj;
-        }
     }
 
     public ScopeId Id { get; }
@@ -108,26 +75,6 @@ public sealed class SerializationScope : IDisposable
         foreach (var (_, obj) in _objects)
         {
             _loader.Deserialize(obj, resolver);
-        }
-    }
-
-    internal void Transfer(SerializationScope source, ISerializedObjectResolver resolver)
-    {
-        var writer = new ArrayBufferWriter<byte>();
-        foreach (var (localId, old) in source._objects)
-        {
-            if (!_objects.TryGetValue(localId, out var newObj))
-            {
-                continue;
-            }
-
-            var emitter = new Utf8YamlEmitter(writer);
-            var serializer = new YamlSerializer(emitter);
-            old.Serialize(ref serializer);
-
-            var parser = new YamlParser(new ReadOnlySequence<byte>(writer.WrittenMemory));
-            var deserializer = new YamlDeserializer(parser, resolver);
-            newObj.Deserialize(ref deserializer);
         }
     }
 }

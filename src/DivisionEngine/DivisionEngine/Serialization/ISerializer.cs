@@ -15,4 +15,10 @@ public interface ISerializer
     void EndArray();
     void BeginStruct(int id, ReadOnlySpan<byte> hintUtf8);
     void EndStruct();
+
+    /// <summary>
+    ///     Writes a node captured by <see cref="IDeserializer.RawNode" /> back unchanged: data that
+    ///     was read without a type to read it into, kept so that saving does not lose it.
+    /// </summary>
+    void RawNode(int id, ReadOnlySpan<byte> hintUtf8, ReadOnlyMemory<byte> node);
 }

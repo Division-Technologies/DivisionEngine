@@ -20,8 +20,8 @@ public partial struct TestPoint
 public partial class RoundTripContainer
 {
     [Serialize] public bool BoolValue;
-    [Serialize] public byte[] Bytes = [];
     [Serialize] public byte ByteValue;
+    [Serialize] public byte[] Bytes = [];
     [Serialize] public char CharValue;
     [Serialize] public DateTime DateTimeValue;
     [Serialize] public decimal DecimalValue;

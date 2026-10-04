@@ -1,0 +1,4 @@
+[submodule "src/Native/packages/tracy"]
+	path = src/Native/packages/tracy
+	url = https://github.com/wolfpld/tracy.git
+	shallow = true

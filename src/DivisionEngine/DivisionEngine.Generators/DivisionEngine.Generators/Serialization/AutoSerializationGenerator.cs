@@ -296,6 +296,14 @@ public class AutoSerializationGenerator : IIncrementalGenerator
 
     private static TypeRegistrationInfo? GetTypeRegistrationInfo(INamedTypeSymbol typeSymbol)
     {
+        // The registration is an assembly-level attribute, so it can only name a type the whole
+        // assembly can see. A type nested inside a private scope is reachable only from code that can
+        // already name it, and that code resolves it without the registry.
+        if (!IsAssemblyVisible(typeSymbol))
+        {
+            return null;
+        }
+
         string? explicitId = null;
         foreach (var attribute in typeSymbol.GetAttributes())
         {
@@ -323,6 +331,19 @@ public class AutoSerializationGenerator : IIncrementalGenerator
             explicitId,
             SerializedTypeGuid.MetadataFullName(typeSymbol),
             isGeneric);
+    }
+
+    private static bool IsAssemblyVisible(INamedTypeSymbol symbol)
+    {
+        for (ISymbol? s = symbol; s is INamedTypeSymbol; s = s.ContainingType)
+        {
+            if (s.DeclaredAccessibility is not (Accessibility.Public or Accessibility.Internal))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>

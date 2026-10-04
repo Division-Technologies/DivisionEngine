@@ -1,0 +1,56 @@
+<Project>
+
+    <!--
+        Profiling is opt-in per build: dotnet build -p:DivisionProfiling=true
+
+        Off by default so that ordinary builds, tests and benchmarks carry no instrumentation at
+        all (Profiler compiles to empty method bodies), which keeps benchmark numbers comparable
+        with an uninstrumented engine. On, the process also needs the DivisionTracy shared library
+        built out of src/Native; see Notes/Core/Profiling.md.
+    -->
+    <PropertyGroup Condition="'$(DivisionProfiling)' == 'true'">
+        <DefineConstants>$(DefineConstants);DIVISION_PROFILING</DefineConstants>
+    </PropertyGroup>
+
+    <!--
+        Where to pick the native library up from. One preset's output directory, not a wildcard
+        over build/, so that having several presets configured does not make the choice depend on
+        enumeration order. Override with -p:DivisionTracyDir=... to use a different one.
+    -->
+    <PropertyGroup Condition="'$(DivisionProfiling)' == 'true' and '$(DivisionTracyDir)' == ''">
+        <DivisionNativeRoot>$(MSBuildThisFileDirectory)..\Native\build\</DivisionNativeRoot>
+        <DivisionTracyDir Condition="$([MSBuild]::IsOSPlatform('OSX'))">$(DivisionNativeRoot)macos-clang-release\bin\</DivisionTracyDir>
+        <DivisionTracyDir Condition="'$(DivisionTracyDir)' == ''">$(DivisionNativeRoot)clang-release\bin\</DivisionTracyDir>
+    </PropertyGroup>
+
+    <ItemGroup Condition="'$(DivisionProfiling)' == 'true'">
+        <!--
+            Copied rather than referenced: the engine loads it by plain P/Invoke name, so it has to
+            sit next to the managed assembly. Missing files are not an error here - Profiler.Startup
+            reports a clear reason at run time, which beats failing every build that has not run
+            CMake yet.
+        -->
+        <None Include="$(DivisionTracyDir)libDivisionTracy.dylib" Condition="Exists('$(DivisionTracyDir)libDivisionTracy.dylib')"
+              CopyToOutputDirectory="PreserveNewest" Link="libDivisionTracy.dylib"/>
+        <None Include="$(DivisionTracyDir)DivisionTracy.dll" Condition="Exists('$(DivisionTracyDir)DivisionTracy.dll')"
+              CopyToOutputDirectory="PreserveNewest" Link="DivisionTracy.dll"/>
+        <None Include="$(DivisionTracyDir)libDivisionTracy.so" Condition="Exists('$(DivisionTracyDir)libDivisionTracy.so')"
+              CopyToOutputDirectory="PreserveNewest" Link="libDivisionTracy.so"/>
+
+        <!--
+            The CLR profiler, which reports the runtime's own events (suspensions, GC, JIT) as Tracy
+            zones. Unlike the library above it is never loaded by the engine: the runtime loads it at
+            startup when CORECLR_PROFILER_PATH points at it, so copying it here is what makes that
+            path exist. It has to be loaded out of this directory and no other, because it emits
+            through the DivisionTracy library sitting next to it - loading it from somewhere else
+            would bring a second Tracy client into the process. See Notes/Core/Profiling.md.
+        -->
+        <None Include="$(DivisionTracyDir)libDivisionClrProfiler.dylib" Condition="Exists('$(DivisionTracyDir)libDivisionClrProfiler.dylib')"
+              CopyToOutputDirectory="PreserveNewest" Link="libDivisionClrProfiler.dylib"/>
+        <None Include="$(DivisionTracyDir)DivisionClrProfiler.dll" Condition="Exists('$(DivisionTracyDir)DivisionClrProfiler.dll')"
+              CopyToOutputDirectory="PreserveNewest" Link="DivisionClrProfiler.dll"/>
+        <None Include="$(DivisionTracyDir)libDivisionClrProfiler.so" Condition="Exists('$(DivisionTracyDir)libDivisionClrProfiler.so')"
+              CopyToOutputDirectory="PreserveNewest" Link="libDivisionClrProfiler.so"/>
+    </ItemGroup>
+
+</Project>

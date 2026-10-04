@@ -35,7 +35,7 @@ public sealed class CSharpProjectImportSmokeTests
         File.WriteAllText(Path.Combine(assets, "Greeter.cs"), """
                                                               using DivisionEngine;
                                                               namespace UserScripts;
-                                                              public sealed class Greeter : Component, ISerializable
+                                                              public sealed class Greeter : SerializableObject, ISerializable
                                                               {
                                                                   public int Value;
                                                                   public void Serialize<T>(ref T s) where T : ISerializer, allows ref struct => s.I32(0, default, Value);

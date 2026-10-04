@@ -7,9 +7,9 @@ namespace DivisionEngine.Tests.Scripting;
 
 /// <summary>
 ///     Verifies the source generator produces working serialization for a user-style
-///     <see cref="Component" />-derived type: it re-declares <c>ISerializable</c> and emits explicit
+///     <see cref="SerializableObject" />-derived type: it re-declares <c>ISerializable</c> and emits explicit
 ///     implementations, so the type's generated Serialize/Deserialize are used (not the throwing
-///     default interface methods inherited via Component).
+///     default interface methods inherited via SerializableObject).
 /// </summary>
 [TestFixture]
 public sealed class ComponentSerializationTests
@@ -25,7 +25,7 @@ public sealed class ComponentSerializationTests
     [Test]
     public void ComponentDerived_AutoSerialization_RoundTrips()
     {
-        var source = new HealthComponent { Health = 7, Label = "hp", Enabled = true };
+        var source = new HealthComponent { Health = 7, Label = "hp" };
 
         var writer = new ArrayBufferWriter<byte>();
         var emitter = new Utf8YamlEmitter(writer);
@@ -87,9 +87,9 @@ public sealed class ComponentSerializationTests
     }
 }
 
-/// <summary>A user-style component: derives from the engine's Component and adds serialized fields.</summary>
+/// <summary>A user-style type: derives from the engine's SerializableObject and adds serialized fields.</summary>
 [AutoSerialization]
-public sealed partial class HealthComponent : Component
+public sealed partial class HealthComponent : SerializableObject
 {
     [Serialize] public int Health;
     [Serialize] public string Label = "";

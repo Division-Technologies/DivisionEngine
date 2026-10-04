@@ -13,8 +13,22 @@ internal ref struct YamlDeserializer(
     private YamlParser _parser = parser;
     private Stack<YamlSerializationModeKind>? _modes;
 
+    /// <summary>
+    ///     A key that was read but does not belong to the field being asked for. Both sides walk field
+    ///     ids in ascending order, so a key larger than the one wanted belongs to a later field and has
+    ///     to wait rather than be consumed.
+    /// </summary>
+    private int? _pendingId;
+
     private bool TryReadNextId(out int id)
     {
+        if (_pendingId is { } pending)
+        {
+            _pendingId = null;
+            id = pending;
+            return true;
+        }
+
         if (_parser.CurrentEventType == ParseEventType.Scalar)
         {
             id = int.Parse(_parser.ReadScalarAsString() ?? throw new InvalidOperationException());
@@ -25,6 +39,18 @@ internal ref struct YamlDeserializer(
         return false;
     }
 
+    /// <summary>
+    ///     Positions the parser on the value of field <paramref name="id" />, or reports that this
+    ///     document does not carry it.
+    ///     <para>
+    ///         Written and requested ids both ascend, so a mismatch says which way the two schemas
+    ///         differ. A smaller key is a field the reader no longer has — it gets dropped and the
+    ///         search continues. A larger key is a field the writer did not have — the reader takes the
+    ///         default and the key is held back for whichever field claims it. Without this, one added
+    ///         or removed field would swallow every field after it, and since ids are hashes of field
+    ///         names an author has no way to tell which of their edits are safe.
+    ///     </para>
+    /// </summary>
     private bool TryRead(int id, ReadOnlySpan<byte> hintUtf8)
     {
         if ((_modes?.TryPeek(out var mode) ?? false) && mode is YamlSerializationModeKind.Sequence)
@@ -32,19 +58,26 @@ internal ref struct YamlDeserializer(
             return true;
         }
 
-        if (!TryReadNextId(out var nextId))
+        while (true)
         {
-            return false;
-        }
+            if (!TryReadNextId(out var nextId))
+            {
+                return false;
+            }
 
-        if (nextId != id)
-        {
-            Console.WriteLine($"Failed to read {id} ({hintUtf8.ToString()})");
+            if (nextId == id)
+            {
+                return true;
+            }
+
+            if (nextId > id)
+            {
+                _pendingId = nextId;
+                return false;
+            }
+
             _parser.SkipCurrentNode();
-            return false;
         }
-
-        return true;
     }
 
     public bool Bool(int id, ReadOnlySpan<byte> hintUtf8)
@@ -215,6 +248,24 @@ internal ref struct YamlDeserializer(
         EndStruct();
     }
 
+    public byte[]? RawNode(int id, ReadOnlySpan<byte> hintUtf8)
+    {
+        return TryRead(id, hintUtf8) ? YamlNodeCopy.Capture(ref _parser) : null;
+    }
+
+    /// <summary>
+    ///     A deserializer over a node captured by <see cref="RawNode" />. The next field read, whatever
+    ///     its id, reads that node: framed like an element of a sequence, which carries no keys.
+    /// </summary>
+    public static YamlDeserializer OverNode(ReadOnlyMemory<byte> node, ISerializedObjectResolver? resolver,
+        ITypeResolver? typeResolver = null)
+    {
+        var deserializer = new YamlDeserializer(YamlNodeCopy.Open(node), resolver, typeResolver);
+        deserializer._modes = new Stack<YamlSerializationModeKind>();
+        deserializer._modes.Push(YamlSerializationModeKind.Sequence);
+        return deserializer;
+    }
+
     public bool TryBeginStruct(int id, ReadOnlySpan<byte> hintUtf8)
     {
         if (!TryRead(id, hintUtf8))
@@ -243,6 +294,9 @@ internal ref struct YamlDeserializer(
         }
 
         _modes.Pop();
+
+        // A key held back for a field that never asked for it belongs to this mapping, not the parent.
+        _pendingId = null;
         while (_parser.CurrentEventType != ParseEventType.MappingEnd)
         {
             _parser.SkipCurrentNode();

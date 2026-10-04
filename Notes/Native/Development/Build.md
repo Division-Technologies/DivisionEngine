@@ -74,6 +74,28 @@ bugprone / performance / cppcoreguidelines / clang-analyzer系をWarningsAsError
 ctest --preset clang-debug
 ```
 
+### Tracyクライアント(`tracy_client`)
+C#エンジンがP/Invokeするプロファイラのクライアントライブラリ。
+ソースは`packages/tracy`のsubmoduleで、C++側の他のターゲットからは参照していないため単独でビルドできる。
+
+**submoduleなのでcloneした直後は空である。**先に取得する。
+
+```powershell
+# clone時に --recurse-submodules していない場合
+git submodule update --init --depth 1
+
+cmake --build --preset clang-release --target tracy_client
+```
+
+未取得のままconfigureすると、CMakeが取得コマンドを添えてFATAL_ERRORで止まる。
+
+成果物は`build/<preset>/bin/`に出る(`DivisionTracy.dll` / `libDivisionTracy.dylib`)。
+`DIVISION_BUILD_TRACY=OFF`で構成から外せる。
+ビルドはupstream自身のCMakeLists(`packages/tracy/CMakeLists.txt`)をオプション経由で駆動し、
+こちらで指定するのは`src/Native/CMakeLists.txt`にまとめてある。
+そのdefinesはC#側の構造体レイアウトと対応しているため、変更する際は両方を直す。
+詳細は[プロファイリング](../../Core/Profiling.md)を参照。
+
 
 ## VS CodeのGUIからビルド
 リポジトリルートを開いた状態で使えるように`.vscode/`にタスクを用意している。
